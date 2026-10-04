@@ -18,7 +18,8 @@
       history: [],        // undo stack of { id, status, comment, verb }
       rejecting: null,    // id of the field whose reject form is open
       draft: "",          // unsent comment text (survives re-renders)
-      rejectError: false,
+      rejectError: false, // false | "empty" | "pending"
+      resolved: null,     // null | { kind: "approved" | "rejected", applied, rejected, comment }
       taskInInbox: true,
     };
   }
@@ -117,7 +118,9 @@
         <textarea id="comment-${f.id}" class="reject-form__input" rows="3"
           aria-describedby="hint-${f.id}${err ? ` err-${f.id}` : ""}" ${err ? 'aria-invalid="true"' : ""}
           placeholder="e.g. Please attach the registry document confirming the change">${esc(state.draft)}</textarea>
-        ${err ? `<p class="reject-form__error" id="err-${f.id}">Add a comment so the requester knows what to fix.</p>` : ""}
+        ${err ? `<p class="reject-form__error" id="err-${f.id}">${err === "pending"
+          ? "Finish or cancel this rejection before approving."
+          : "Add a comment so the requester knows what to fix."}</p>` : ""}
         <div class="reject-form__actions">
           <button type="button" class="btn-sm btn-sm--ghost" data-action="cancel-reject">Cancel</button>
           <button type="submit" class="btn-sm btn-sm--danger">Reject change</button>
@@ -128,13 +131,14 @@
   function changeHTML(f) {
     const rejected = f.status === "rejected";
     const editing = state.rejecting === f.id;
+    const locked = !!state.resolved; // read-only once the DCR is resolved
     const head = rejected
       ? `<span class="tag tag--rejected">Rejected</span>
          <span class="change__spacer"></span>
-         <button type="button" class="text-action" data-action="unreject">Unreject<span class="sr-only"> ${esc(f.label)}</span></button>`
+         ${locked ? "" : `<button type="button" class="text-action" data-action="unreject">Unreject<span class="sr-only"> ${esc(f.label)}</span></button>`}`
       : `<span class="tag tag--${f.change}">${CHANGE_LABEL[f.change]}</span>
          <span class="change__spacer"></span>
-         ${editing ? "" : `<button type="button" class="text-action text-action--reject" data-action="start-reject">Reject<span class="sr-only"> ${esc(f.label)} change</span></button>`}
+         ${editing || locked ? "" : `<button type="button" class="text-action text-action--reject" data-action="start-reject">Reject<span class="sr-only"> ${esc(f.label)} change</span></button>`}
          ${confidenceHTML(f)}`;
     return `
       <li class="change change--${rejected ? "rejected" : f.confidence}${editing ? " is-editing" : ""}" id="change-${f.id}" data-id="${f.id}" tabindex="-1">
@@ -164,8 +168,22 @@
     return `
       <div class="tally">
         <span class="tally__text">${parts.join(" · ")}</span>
-        <button type="button" class="link-btn tally__undo" id="undo" ${state.history.length ? "" : "disabled"}>Undo last edit</button>
+        ${state.resolved ? "" : `<button type="button" class="link-btn tally__undo" id="undo" ${state.history.length ? "" : "disabled"}>Undo last edit</button>`}
       </div>`;
+  }
+
+  function actionsHTML() {
+    const r = state.resolved;
+    if (r) {
+      const text = r.kind === "approved"
+        ? `Approved · ${r.applied} ${r.applied === 1 ? "change" : "changes"} applied, ${r.rejected} rejected`
+        : "Rejected · returned to the requester with your feedback";
+      return `<p class="resolved-note resolved-note--${r.kind}">${text}</p>`;
+    }
+    const nothingToApply = tally().rejected === state.fields.length;
+    return `
+      <button type="button" class="btn btn--reject" id="reject-dcr" aria-haspopup="dialog">Reject</button>
+      <button type="button" class="btn btn--approve" id="approve-dcr" ${nothingToApply ? 'disabled title="Every change is rejected — use Reject instead"' : ""}>Approve</button>`;
   }
 
   function countBy(key) {
@@ -195,6 +213,7 @@
     $("#entity-id").textContent = dcr.entityId;
     $("#panel-summary").innerHTML = summaryHTML() + tallyHTML();
     $("#changes").innerHTML = state.fields.map(changeHTML).join("");
+    $("#panel-actions").innerHTML = actionsHTML();
   }
 
   function getField(id) {
@@ -233,7 +252,7 @@
   function confirmReject(id) {
     const comment = state.draft.trim();
     if (!comment) {
-      state.rejectError = true;
+      state.rejectError = "empty";
       renderPanel();
       $(`#comment-${id}`).focus();
       return;
@@ -305,12 +324,75 @@
     $("#panel-title").focus();
   }
 
-  function closePanel() {
+  function closePanel({ restoreFocus = true } = {}) {
     panel.hidden = true;
     const row = $('tr[data-task="dcr"]');
     if (row) row.classList.remove("is-selected");
-    const opener = $("#open-dcr");
-    if (opener) opener.focus();
+    if (restoreFocus) ($("#open-dcr") || $("#task-total")).focus();
+  }
+
+  // ---------- Resolve: approve / reject the whole request ----------
+  function guardOpenRejection() {
+    if (!state.rejecting) return false;
+    state.rejectError = "pending";
+    renderPanel();
+    $(`#comment-${state.rejecting}`).focus();
+    return true;
+  }
+
+  function approve() {
+    if (guardOpenRejection()) return;
+    const t = tally();
+    state.resolved = { kind: "approved", applied: state.fields.length - t.rejected, rejected: t.rejected };
+    finishResolve();
+  }
+
+  const rejectDialog = $("#reject-dialog");
+  function openRejectDialog() {
+    if (guardOpenRejection()) return;
+    $("#reject-dcr-comment").value = "";
+    setRejectDialogError(false);
+    rejectDialog.showModal();
+  }
+  function setRejectDialogError(on) {
+    const input = $("#reject-dcr-comment");
+    $("#reject-dcr-error").hidden = !on;
+    input.toggleAttribute("aria-invalid", on);
+  }
+  function confirmRejectDCR() {
+    const comment = $("#reject-dcr-comment").value.trim();
+    if (!comment) {
+      setRejectDialogError(true);
+      $("#reject-dcr-comment").focus();
+      return;
+    }
+    rejectDialog.close();
+    state.resolved = { kind: "rejected", comment };
+    finishResolve();
+  }
+
+  function finishResolve() {
+    state.taskInInbox = false;
+    closePanel({ restoreFocus: false });
+    renderInbox();
+    showToast();
+  }
+
+  // ---------- Toast ----------
+  const toast = $("#toast");
+  function showToast() {
+    const r = state.resolved;
+    const changes = (n) => `${n} ${n === 1 ? "change" : "changes"}`;
+    $("#toast-text").textContent = r.kind === "approved"
+      ? `DCR approved for ${dcr.entityName} · ${changes(r.applied)} applied, ${r.rejected} rejected`
+      : `DCR rejected for ${dcr.entityName} · returned to ${dcr.createdBy}`;
+    toast.className = `toast toast--${r.kind}`;
+    toast.hidden = false;
+    announce($("#toast-text").textContent);
+    $("#toast-view").focus();
+  }
+  function hideToast() {
+    toast.hidden = true;
   }
 
   // ---------- Events ----------
@@ -319,10 +401,12 @@
   });
   $("#close-panel").addEventListener("click", closePanel);
   panel.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-action], #how-open, #undo");
+    const btn = e.target.closest("[data-action], #how-open, #undo, #approve-dcr, #reject-dcr");
     if (!btn) return;
     if (btn.id === "how-open") return openHow();
     if (btn.id === "undo") return undo();
+    if (btn.id === "approve-dcr") return approve();
+    if (btn.id === "reject-dcr") return openRejectDialog();
     const id = btn.closest(".change")?.dataset.id;
     switch (btn.dataset.action) {
       case "toggle-why": return toggleWhy(id);
@@ -353,6 +437,22 @@
   });
   $("#how-close").addEventListener("click", () => howDialog.close());
   howDialog.addEventListener("close", () => $("#how-open")?.focus());
+  $("#reject-dcr-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    confirmRejectDCR();
+  });
+  $("#reject-dcr-cancel").addEventListener("click", () => {
+    rejectDialog.close();
+    $("#reject-dcr")?.focus();
+  });
+  $("#toast-view").addEventListener("click", () => {
+    hideToast();
+    openPanel();
+  });
+  $("#toast-close").addEventListener("click", () => {
+    hideToast();
+    $("#task-total").focus();
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || panel.hidden) return;
     if (document.querySelector("dialog[open]")) return; // dialog handles its own Esc
@@ -363,7 +463,9 @@
   $("#reset-demo").addEventListener("click", () => {
     state = freshState();
     panel.hidden = true;
+    hideToast();
     renderInbox();
+    $("#open-dcr").focus();
   });
 
   renderInbox();

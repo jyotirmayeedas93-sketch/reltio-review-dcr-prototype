@@ -57,7 +57,7 @@
 
     <main class="main" id="main">
       <div class="task-bar">
-        <span id="task-total">9 tasks</span>
+        <span id="task-total" tabindex="-1">9 tasks</span>
       </div>
       <div class="tabs" role="presentation">
         <span class="tab is-active">All</span>
@@ -110,14 +110,36 @@
         <div id="panel-summary"></div>
         <ul class="changes" id="changes" aria-label="Proposed changes"></ul>
       </div>
-      <div class="panel__actions" id="panel-actions">
-        <button type="button" class="btn btn--reject" id="reject-dcr">Reject</button>
-        <button type="button" class="btn btn--approve" id="approve-dcr">Approve</button>
-      </div>
+      <div class="panel__actions" id="panel-actions"></div>
     </aside>
   </div>
 
   <div class="sr-only" id="live" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Confirmation toast after the DCR is resolved -->
+  <div class="toast" id="toast" role="status" hidden>
+    <svg class="toast__icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
+    <span id="toast-text"></span>
+    <button type="button" class="toast__link" id="toast-view">View task</button>
+    <button type="button" class="toast__close" id="toast-close" aria-label="Dismiss">
+      <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
+    </button>
+  </div>
+
+  <!-- Rejecting the whole request: still requires feedback, and points to the per-field path -->
+  <dialog class="how confirm" id="reject-dialog" aria-labelledby="reject-dcr-title">
+    <form id="reject-dcr-form" novalidate>
+      <h2 id="reject-dcr-title">Reject the whole request?</h2>
+      <p class="how__lede">All 10 changes go back to the requester. To return only the fields that need fixing, reject them one by one and approve the rest.</p>
+      <label class="reject-form__label" for="reject-dcr-comment">Feedback for the requester</label>
+      <textarea id="reject-dcr-comment" class="reject-form__input" rows="3" aria-describedby="reject-dcr-error"></textarea>
+      <p class="reject-form__error" id="reject-dcr-error" hidden>Add feedback so the requester knows what to fix.</p>
+      <div class="reject-form__actions">
+        <button type="button" class="btn-sm btn-sm--ghost" id="reject-dcr-cancel">Cancel</button>
+        <button type="submit" class="btn-sm btn-sm--danger">Reject request</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog class="how" id="how-dialog" aria-labelledby="how-title">
     <div class="how__head">

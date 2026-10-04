@@ -255,3 +255,31 @@ button { font: inherit; color: inherit; }
 .tally__rejected { color: var(--reject); font-weight: 600; }
 .tally__undo { font-size: 12px; padding: 0; }
 .tally__undo:disabled { color: var(--text-faint); text-decoration: none; cursor: default; }
+
+/* ---------- Resolve ---------- */
+.resolved-note { flex: 1; margin: 0; padding: 9px 12px; border-radius: 4px; font-size: 13px; font-weight: 500; text-align: center; }
+.resolved-note--approved { background: var(--conf-high-bg); color: var(--conf-high-fg); }
+.resolved-note--rejected { background: var(--reject-soft); color: var(--reject); }
+
+.confirm h2 { margin: 0; font-size: 17px; color: var(--text-heading); }
+.confirm .how__lede { margin: 6px 0 14px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%); z-index: 50;
+  display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px);
+  padding: 10px 10px 10px 16px; border-radius: 6px; background: #1d3a26; color: #f1f5f2;
+  font-size: 13.5px; box-shadow: 0 10px 30px rgba(17, 18, 21, 0.25);
+  animation: toast-in 200ms ease-out;
+}
+.toast[hidden] { display: none; }
+.toast--rejected { background: #3a1d1d; }
+@keyframes toast-in { from { transform: translate(-50%, 12px); opacity: 0; } to { transform: translateX(-50%); opacity: 1; } }
+.toast__icon { width: 18px; height: 18px; flex: none; fill: none; stroke: #8fd4a3; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.toast--rejected .toast__icon { stroke: #f0a3a3; }
+.toast__link { background: none; border: 0; padding: 4px 6px; color: #9fe0b1; font-weight: 500; cursor: pointer; white-space: nowrap; border-radius: 4px; }
+.toast--rejected .toast__link { color: #f5b8b8; }
+.toast__link:hover { text-decoration: underline; }
+.toast__close { display: inline-flex; background: none; border: 0; padding: 4px; color: inherit; cursor: pointer; border-radius: 4px; opacity: 0.8; }
+.toast__close .icon { width: 16px; height: 16px; }
+.toast :focus-visible { box-shadow: 0 0 0 2px #f1f5f2; }
+.confirm .reject-form__label { margin-bottom: 6px; }
