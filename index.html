@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Review DCR — Working Prototype</title>
+  <meta name="description" content="Working prototype of the Reltio Workflow Review DCR experience: field-level diffs, AI confidence with reasoning, per-field rejection with feedback.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#inbox-table">Skip to tasks</a>
+
+  <div class="demo-ribbon" role="note">
+    <span><strong>Working prototype</strong> · Reltio Workflow case study · demo data</span>
+    <button type="button" class="link-btn" id="reset-demo">Reset demo</button>
+  </div>
+
+  <header class="app-header">
+    <div class="app-header__left">
+      <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      <span class="brand">RELTIO</span>
+      <span class="divider" aria-hidden="true"></span>
+      <span class="app-title">Inbox</span>
+    </div>
+    <div class="app-header__right" aria-hidden="true">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20h4"/></svg>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z"/></svg>
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.5 18.5c1.5-2 3.4-3 5.5-3s4 1 5.5 3"/></svg>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <aside class="sidebar" aria-label="Task categories and filters">
+      <nav aria-label="Task categories">
+        <ul class="nav-list">
+          <li><a href="#" class="nav-item is-active" aria-current="page"><span>Inbox</span><span class="nav-count" id="inbox-count">9</span></a></li>
+          <li><a href="#" class="nav-item"><span>Team</span><span class="nav-count">63</span></a></li>
+          <li><a href="#" class="nav-item"><span>Sent</span><span class="nav-count">0</span></a></li>
+          <li><a href="#" class="nav-item"><span>All</span><span class="nav-count">72</span></a></li>
+        </ul>
+      </nav>
+      <div class="filters" aria-hidden="true">
+        <p class="filters__title">Filters</p>
+        <div class="fake-input">Search &amp; add filters</div>
+        <p class="filters__adv">Advanced Search</p>
+        <p class="filters__hint">Search by entity attributes</p>
+        <p class="filters__label">Task type</p><div class="fake-select">All tasks</div>
+        <p class="filters__label">Step</p><div class="fake-select">All steps</div>
+        <p class="filters__label">DCR type</p><div class="fake-select">All values</div>
+        <p class="filters__label">Priority</p><div class="fake-select">All</div>
+        <p class="filters__label">Status</p><div class="fake-select">Open</div>
+      </div>
+    </aside>
+
+    <main class="main" id="main">
+      <div class="task-bar">
+        <span id="task-total">9 tasks</span>
+      </div>
+      <div class="tabs" role="presentation">
+        <span class="tab is-active">All</span>
+        <span class="tab">Authoring</span>
+        <span class="tab">Data Change Request Review</span>
+        <span class="tab">Potential Match Review</span>
+        <span class="tab">RDM Data Change Request Review</span>
+      </div>
+      <div class="table-wrap">
+        <table class="task-table" id="inbox-table">
+          <caption class="sr-only">Inbox tasks. Open the first task to review its data change request.</caption>
+          <thead>
+            <tr>
+              <th scope="col">Task type</th>
+              <th scope="col">Entities</th>
+              <th scope="col">Priority</th>
+              <th scope="col">Created by</th>
+              <th scope="col">Created on</th>
+              <th scope="col">Due date</th>
+            </tr>
+          </thead>
+          <tbody id="task-rows"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
