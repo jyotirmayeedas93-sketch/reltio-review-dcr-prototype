@@ -459,6 +459,9 @@
     closePanel();
   });
 
+  // Sidebar links are part of the static shell in this prototype.
+  document.querySelectorAll(".nav-item").forEach((a) => a.addEventListener("click", (e) => e.preventDefault()));
+
   // ---------- Boot ----------
   $("#reset-demo").addEventListener("click", () => {
     state = freshState();

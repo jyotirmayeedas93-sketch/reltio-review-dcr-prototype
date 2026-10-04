@@ -169,6 +169,9 @@ button { font: inherit; color: inherit; }
   display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 7px;
   border: 0; border-radius: var(--pill); font-size: 10px; font-weight: 500; white-space: nowrap; cursor: pointer;
 }
+.conf { position: relative; }
+/* Small pill, but a 24px+ hit area (WCAG 2.2 target size) */
+.conf:not(.conf--static)::after { content: ""; position: absolute; inset: -4px -2px; }
 .conf--static { padding: 2px 8px; cursor: default; }
 .conf__icon { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .conf__chev { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 150ms; }
@@ -225,7 +228,7 @@ button { font: inherit; color: inherit; }
 .text-action:hover { background: var(--surface-alt); }
 
 .change--rejected { background: var(--surface-alt); }
-.change--rejected .change__values span:not(.sr-only):not(.arrow) { text-decoration: line-through; color: var(--text-faint); font-weight: 400; }
+.change--rejected .change__values span:not(.sr-only):not(.arrow) { text-decoration: line-through; color: var(--text-muted); font-weight: 400; }
 .change--rejected .change__label { color: var(--text-muted); }
 .change.is-editing { background: #fff; box-shadow: inset 3px 0 0 var(--reject); }
 
@@ -283,3 +286,35 @@ button { font: inherit; color: inherit; }
 .toast__close .icon { width: 16px; height: 16px; }
 .toast :focus-visible { box-shadow: 0 0 0 2px #f1f5f2; }
 .confirm .reject-form__label { margin-bottom: 6px; }
+
+/* ---------- Accessibility & responsive polish ---------- */
+.text-action, .toast__close, .toast__link { min-height: 24px; }
+.task-table:focus { outline: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+@media (forced-colors: active) {
+  .conf, .tag, .summary, .toast { border: 1px solid CanvasText; }
+  .change.is-editing { border-left: 3px solid Highlight; }
+}
+
+/* Tablet: drop the filter sidebar, keep the queue + panel side by side */
+@media (max-width: 1100px) {
+  .sidebar { display: none; }
+}
+
+/* Phone: the review panel takes the full screen */
+@media (max-width: 640px) {
+  .demo-ribbon { font-size: 11px; padding: 6px 12px; }
+  .app-header { padding: 0 12px; }
+  .app-header__right { display: none; }
+  .task-bar { padding: 12px 16px; }
+  .tabs { padding: 0 8px; }
+  .panel { width: 100%; border-left: 0; }
+  .summary { flex-wrap: wrap; row-gap: 4px; }
+  .toast { left: 16px; right: 16px; transform: none; bottom: 16px; flex-wrap: wrap; align-items: flex-start; animation: none; }
+  #toast-text { flex: 1 1 calc(100% - 40px); }
+  .how__list > div { grid-template-columns: 1fr; gap: 4px; }
+}
