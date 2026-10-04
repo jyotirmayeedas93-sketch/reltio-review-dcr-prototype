@@ -91,7 +91,7 @@
   function confidenceHTML(f) {
     const c = CONFIDENCE[f.confidence];
     return `
-      <button type="button" class="conf conf--${f.confidence}" data-action="toggle-why"
+      <button type="button" class="pill conf conf--${f.confidence}" data-action="toggle-why"
         aria-expanded="${f.expanded}" aria-controls="why-${f.id}">
         <svg class="conf__icon" aria-hidden="true" viewBox="0 0 24 24">${c.icon}</svg>
         ${c.label}<span class="sr-only">, ${f.expanded ? "hide" : "show"} reasoning</span>
@@ -122,8 +122,8 @@
           ? "Finish or cancel this rejection before approving."
           : "Add a comment so the requester knows what to fix."}</p>` : ""}
         <div class="reject-form__actions">
-          <button type="button" class="btn-sm btn-sm--ghost" data-action="cancel-reject">Cancel</button>
-          <button type="submit" class="btn-sm btn-sm--danger">Reject change</button>
+          <button type="button" class="btn btn--outline" data-action="cancel-reject">Cancel</button>
+          <button type="submit" class="btn btn--danger">Reject change</button>
         </div>
       </form>`;
   }
@@ -182,8 +182,8 @@
     }
     const nothingToApply = tally().rejected === state.fields.length;
     return `
-      <button type="button" class="btn btn--reject" id="reject-dcr" aria-haspopup="dialog">Reject</button>
-      <button type="button" class="btn btn--approve" id="approve-dcr" ${nothingToApply ? 'disabled title="Every change is rejected — use Reject instead"' : ""}>Approve</button>`;
+      <button type="button" class="btn btn--danger-outline" id="reject-dcr" aria-haspopup="dialog">Reject</button>
+      <button type="button" class="btn btn--primary" id="approve-dcr" ${nothingToApply ? 'disabled title="Every change is rejected — use Reject instead"' : ""}>Approve</button>`;
   }
 
   function countBy(key) {
@@ -383,12 +383,13 @@
   function showToast() {
     const r = state.resolved;
     const changes = (n) => `${n} ${n === 1 ? "change" : "changes"}`;
+    $("#toast-title").textContent = r.kind === "approved" ? "DCR approved" : "DCR rejected";
     $("#toast-text").textContent = r.kind === "approved"
-      ? `DCR approved for ${dcr.entityName} · ${changes(r.applied)} applied, ${r.rejected} rejected`
-      : `DCR rejected for ${dcr.entityName} · returned to ${dcr.createdBy}`;
+      ? `${dcr.entityName} · ${changes(r.applied)} applied, ${r.rejected} rejected`
+      : `${dcr.entityName} · returned to ${dcr.createdBy} with your feedback`;
     toast.className = `toast toast--${r.kind}`;
     toast.hidden = false;
-    announce($("#toast-text").textContent);
+    announce(`${$("#toast-title").textContent} for ${$("#toast-text").textContent}`);
     $("#toast-view").focus();
   }
   function hideToast() {

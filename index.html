@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="design-system/tokens.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -119,8 +120,11 @@
   <!-- Confirmation toast after the DCR is resolved -->
   <div class="toast" id="toast" role="status" hidden>
     <svg class="toast__icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.8 2.8L16.5 9.5"/></svg>
-    <span id="toast-text"></span>
-    <button type="button" class="toast__link" id="toast-view">View task</button>
+    <div class="toast__content">
+      <p class="toast__title" id="toast-title"></p>
+      <p class="toast__body" id="toast-text"></p>
+      <button type="button" class="link-btn toast__link" id="toast-view">View task</button>
+    </div>
     <button type="button" class="toast__close" id="toast-close" aria-label="Dismiss">
       <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17"/></svg>
     </button>
@@ -135,8 +139,8 @@
       <textarea id="reject-dcr-comment" class="reject-form__input" rows="3" aria-describedby="reject-dcr-error"></textarea>
       <p class="reject-form__error" id="reject-dcr-error" hidden>Add feedback so the requester knows what to fix.</p>
       <div class="reject-form__actions">
-        <button type="button" class="btn-sm btn-sm--ghost" id="reject-dcr-cancel">Cancel</button>
-        <button type="submit" class="btn-sm btn-sm--danger">Reject request</button>
+        <button type="button" class="btn btn--outline" id="reject-dcr-cancel">Cancel</button>
+        <button type="submit" class="btn btn--danger">Reject request</button>
       </div>
     </form>
   </dialog>
@@ -152,11 +156,11 @@
 
     <h3>What each signal means</h3>
     <dl class="how__list">
-      <div><dt><span class="conf conf--high conf--static">High confidence</span></dt>
+      <div><dt><span class="pill conf conf--high conf--static">High confidence</span></dt>
         <dd>The proposed value is consistent with reference data and with the other fields on this record.</dd></div>
-      <div><dt><span class="conf conf--review conf--static">Needs review</span></dt>
+      <div><dt><span class="pill conf conf--review conf--static">Needs review</span></dt>
         <dd>Something about the change can't be verified or carries risk. Read the reasoning before you decide.</dd></div>
-      <div><dt><span class="conf conf--nosignal conf--static">Not enough signal</span></dt>
+      <div><dt><span class="pill conf conf--nosignal conf--static">Not enough signal</span></dt>
         <dd>There's nothing to check this value against. It's your judgment alone, and the signal says so rather than guessing.</dd></div>
     </dl>
 
