@@ -117,6 +117,40 @@
     </aside>
   </div>
 
+  <dialog class="how" id="how-dialog" aria-labelledby="how-title">
+    <div class="how__head">
+      <h2 id="how-title">How confidence signals work</h2>
+      <button type="button" class="icon-btn" id="how-close" aria-label="Close">
+        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="how__lede">Signals help you decide where to look. They aren't a verdict.</p>
+
+    <h3>What each signal means</h3>
+    <dl class="how__list">
+      <div><dt><span class="conf conf--high conf--static">High confidence</span></dt>
+        <dd>The proposed value is consistent with reference data and with the other fields on this record.</dd></div>
+      <div><dt><span class="conf conf--review conf--static">Needs review</span></dt>
+        <dd>Something about the change can't be verified or carries risk. Read the reasoning before you decide.</dd></div>
+      <div><dt><span class="conf conf--nosignal conf--static">Not enough signal</span></dt>
+        <dd>There's nothing to check this value against. It's your judgment alone, and the signal says so rather than guessing.</dd></div>
+    </dl>
+
+    <h3>What it does</h3>
+    <ul>
+      <li>Checks each proposed value on its own, against reference sources and the rest of the record.</li>
+      <li>Shows its reasoning on every field, so you can disagree with it.</li>
+    </ul>
+
+    <h3>What it never does</h3>
+    <ul>
+      <li>Approve, reject or edit a change. Every decision is yours.</li>
+      <li>Hide a field. Every proposed change is always listed.</li>
+    </ul>
+
+    <p class="how__note">In this prototype the signals and reasoning are demo data, not a live model.</p>
+  </dialog>
+
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>
