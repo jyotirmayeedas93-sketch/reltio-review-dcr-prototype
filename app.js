@@ -15,6 +15,10 @@
     return {
       // Flagged fields start with their reasoning open, as in the Figma design.
       fields: SEED_FIELDS.map((f) => ({ ...f, status: "pending", comment: "", expanded: f.confidence !== "high" })),
+      history: [],        // undo stack of { id, status, comment, verb }
+      rejecting: null,    // id of the field whose reject form is open
+      draft: "",          // unsent comment text (survives re-renders)
+      rejectError: false,
       taskInInbox: true,
     };
   }
@@ -101,18 +105,67 @@
       </p>`;
   }
 
-  function changeHTML(f) {
+  const COMMENT_ICON = '<svg class="comment__icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>';
+
+  // Inline form: rejecting a single field always requires feedback.
+  function rejectFormHTML(f) {
+    const err = state.rejectError;
     return `
-      <li class="change change--${f.confidence}" id="change-${f.id}" data-id="${f.id}" tabindex="-1">
+      <form class="reject-form" data-id="${f.id}" novalidate>
+        <label class="reject-form__label" for="comment-${f.id}">Why are you rejecting this change?</label>
+        <p class="reject-form__hint" id="hint-${f.id}">Required. The requester sees this on the ${esc(f.label)} field and only needs to fix this field.</p>
+        <textarea id="comment-${f.id}" class="reject-form__input" rows="3"
+          aria-describedby="hint-${f.id}${err ? ` err-${f.id}` : ""}" ${err ? 'aria-invalid="true"' : ""}
+          placeholder="e.g. Please attach the registry document confirming the change">${esc(state.draft)}</textarea>
+        ${err ? `<p class="reject-form__error" id="err-${f.id}">Add a comment so the requester knows what to fix.</p>` : ""}
+        <div class="reject-form__actions">
+          <button type="button" class="btn-sm btn-sm--ghost" data-action="cancel-reject">Cancel</button>
+          <button type="submit" class="btn-sm btn-sm--danger">Reject change</button>
+        </div>
+      </form>`;
+  }
+
+  function changeHTML(f) {
+    const rejected = f.status === "rejected";
+    const editing = state.rejecting === f.id;
+    const head = rejected
+      ? `<span class="tag tag--rejected">Rejected</span>
+         <span class="change__spacer"></span>
+         <button type="button" class="text-action" data-action="unreject">Unreject<span class="sr-only"> ${esc(f.label)}</span></button>`
+      : `<span class="tag tag--${f.change}">${CHANGE_LABEL[f.change]}</span>
+         <span class="change__spacer"></span>
+         ${editing ? "" : `<button type="button" class="text-action text-action--reject" data-action="start-reject">Reject<span class="sr-only"> ${esc(f.label)} change</span></button>`}
+         ${confidenceHTML(f)}`;
+    return `
+      <li class="change change--${rejected ? "rejected" : f.confidence}${editing ? " is-editing" : ""}" id="change-${f.id}" data-id="${f.id}" tabindex="-1">
         <div class="change__head">
           <span class="change__label">${esc(f.label)}</span>
-          <span class="tag tag--${f.change}">${CHANGE_LABEL[f.change]}</span>
-          <span class="change__spacer"></span>
-          ${confidenceHTML(f)}
+          ${head}
         </div>
-        <div class="change__values">${valuesHTML(f)}</div>
-        ${reasoningHTML(f)}
+        <div class="change__values">${rejected ? '<span class="sr-only">Rejected:</span>' : ""}${valuesHTML(f)}</div>
+        ${rejected
+          ? `<p class="comment">${COMMENT_ICON}<span><span class="comment__who">Your feedback:</span> ${esc(f.comment)}</span></p>`
+          : reasoningHTML(f)}
+        ${editing ? rejectFormHTML(f) : ""}
       </li>`;
+  }
+
+  // Live tally — always derived from field state.
+  function tally() {
+    const t = { updated: 0, added: 0, deleted: 0, rejected: 0 };
+    state.fields.forEach((f) => (f.status === "rejected" ? t.rejected++ : t[f.change]++));
+    return t;
+  }
+
+  function tallyHTML() {
+    const t = tally();
+    const parts = [`${t.updated} Updated`, `${t.added} Added`, `${t.deleted} Deleted`];
+    if (t.rejected) parts.push(`<strong class="tally__rejected">${t.rejected} Rejected</strong>`);
+    return `
+      <div class="tally">
+        <span class="tally__text">${parts.join(" · ")}</span>
+        <button type="button" class="link-btn tally__undo" id="undo" ${state.history.length ? "" : "disabled"}>Undo last edit</button>
+      </div>`;
   }
 
   function countBy(key) {
@@ -140,12 +193,83 @@
     $("#entity-name").textContent = dcr.entityName;
     $("#entity-type").textContent = dcr.entityType;
     $("#entity-id").textContent = dcr.entityId;
-    $("#panel-summary").innerHTML = summaryHTML();
+    $("#panel-summary").innerHTML = summaryHTML() + tallyHTML();
     $("#changes").innerHTML = state.fields.map(changeHTML).join("");
   }
 
   function getField(id) {
     return state.fields.find((f) => f.id === id);
+  }
+
+  // Polite live region so screen-reader users hear state changes.
+  function announce(msg) {
+    const live = $("#live");
+    live.textContent = "";
+    setTimeout(() => (live.textContent = msg), 50);
+  }
+
+  function tallyPhrase() {
+    const t = tally();
+    return `${t.rejected} rejected, ${state.fields.length - t.rejected} to apply.`;
+  }
+
+  // ---------- Per-field rejection ----------
+  function startReject(id) {
+    state.rejecting = id;
+    state.draft = "";
+    state.rejectError = false;
+    renderPanel();
+    $(`#comment-${id}`).focus();
+  }
+
+  function cancelReject() {
+    const id = state.rejecting;
+    state.rejecting = null;
+    state.rejectError = false;
+    renderPanel();
+    $(`#change-${id} [data-action="start-reject"]`)?.focus();
+  }
+
+  function confirmReject(id) {
+    const comment = state.draft.trim();
+    if (!comment) {
+      state.rejectError = true;
+      renderPanel();
+      $(`#comment-${id}`).focus();
+      return;
+    }
+    const f = getField(id);
+    state.history.push({ id, status: f.status, comment: f.comment, verb: "rejected" });
+    f.status = "rejected";
+    f.comment = comment;
+    state.rejecting = null;
+    state.rejectError = false;
+    renderPanel();
+    $(`#change-${id} [data-action="unreject"]`).focus();
+    announce(`${f.label} rejected with feedback. ${tallyPhrase()}`);
+  }
+
+  function unreject(id) {
+    const f = getField(id);
+    state.history.push({ id, status: f.status, comment: f.comment, verb: "unrejected" });
+    f.status = "pending";
+    f.comment = "";
+    renderPanel();
+    $(`#change-${id} [data-action="start-reject"]`).focus();
+    announce(`${f.label} restored. ${tallyPhrase()}`);
+  }
+
+  function undo() {
+    const last = state.history.pop();
+    if (!last) return;
+    const f = getField(last.id);
+    f.status = last.status;
+    f.comment = last.comment;
+    state.rejecting = null;
+    renderPanel();
+    const btn = $("#undo");
+    (btn.disabled ? $(`#change-${f.id}`) : btn).focus();
+    announce(`Undid: ${f.label} ${last.verb}. ${tallyPhrase()}`);
   }
 
   function toggleWhy(id) {
@@ -195,13 +319,36 @@
   });
   $("#close-panel").addEventListener("click", closePanel);
   panel.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-action], #how-open");
+    const btn = e.target.closest("[data-action], #how-open, #undo");
     if (!btn) return;
     if (btn.id === "how-open") return openHow();
+    if (btn.id === "undo") return undo();
     const id = btn.closest(".change")?.dataset.id;
     switch (btn.dataset.action) {
       case "toggle-why": return toggleWhy(id);
       case "jump": return jumpTo(btn.dataset.level);
+      case "start-reject": return startReject(id);
+      case "cancel-reject": return cancelReject();
+      case "unreject": return unreject(id);
+    }
+  });
+  panel.addEventListener("input", (e) => {
+    if (e.target.matches(".reject-form__input")) state.draft = e.target.value;
+  });
+  panel.addEventListener("submit", (e) => {
+    e.preventDefault();
+    confirmReject(e.target.dataset.id);
+  });
+  panel.addEventListener("keydown", (e) => {
+    // Esc inside the comment box cancels the rejection, not the whole panel.
+    if (e.key === "Escape" && e.target.matches(".reject-form__input")) {
+      e.stopPropagation();
+      cancelReject();
+    }
+    // Cmd/Ctrl + Enter submits the comment.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && e.target.matches(".reject-form__input")) {
+      e.preventDefault();
+      confirmReject(state.rejecting);
     }
   });
   $("#how-close").addEventListener("click", () => howDialog.close());

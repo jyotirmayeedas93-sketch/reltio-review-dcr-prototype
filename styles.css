@@ -211,3 +211,47 @@ button { font: inherit; color: inherit; }
 .how ul { margin: 0; padding-left: 18px; font-size: 13px; }
 .how li { margin-bottom: 4px; }
 .how__note { margin: 18px 0 0; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Per-field rejection ---------- */
+.text-action {
+  background: none; border: 0; padding: 2px 4px; font-size: 11px; font-weight: 600;
+  letter-spacing: 0.05em; text-transform: uppercase; cursor: pointer; color: var(--accent-text); border-radius: 4px;
+}
+.text-action--reject { color: var(--reject); opacity: 0; transition: opacity 120ms; }
+.change:hover .text-action--reject,
+.change:focus-within .text-action--reject,
+.text-action--reject:focus-visible { opacity: 1; }
+@media (hover: none) { .text-action--reject { opacity: 1; } }
+.text-action:hover { background: var(--surface-alt); }
+
+.change--rejected { background: var(--surface-alt); }
+.change--rejected .change__values span:not(.sr-only):not(.arrow) { text-decoration: line-through; color: var(--text-faint); font-weight: 400; }
+.change--rejected .change__label { color: var(--text-muted); }
+.change.is-editing { background: #fff; box-shadow: inset 3px 0 0 var(--reject); }
+
+.comment { display: flex; gap: 6px; margin: 8px 0 0; padding: 7px 9px; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); font-size: 12px; line-height: 1.45; }
+.comment__icon { width: 14px; height: 14px; flex: none; margin-top: 1px; fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linejoin: round; }
+.comment__who { font-weight: 600; }
+
+.reject-form { margin-top: 10px; }
+.reject-form__label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-heading); }
+.reject-form__hint { margin: 2px 0 6px; font-size: 11.5px; color: var(--text-muted); }
+.reject-form__input {
+  width: 100%; resize: vertical; min-height: 64px; padding: 8px 10px; font: inherit; font-size: 13px;
+  border: 1px solid #c9cad0; border-radius: var(--radius); color: var(--text-heading);
+}
+.reject-form__input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.reject-form__input[aria-invalid="true"] { border-color: var(--reject); }
+.reject-form__error { margin: 4px 0 0; font-size: 12px; color: var(--reject); font-weight: 500; }
+.reject-form__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+.btn-sm { height: 30px; padding: 0 12px; border-radius: 4px; font-size: 13px; font-weight: 500; cursor: pointer; border: 1px solid transparent; }
+.btn-sm--ghost { background: none; border-color: #d4d5da; }
+.btn-sm--ghost:hover { background: var(--surface-alt); }
+.btn-sm--danger { background: var(--reject); color: #fff; }
+.btn-sm--danger:hover { background: #a82020; }
+
+/* Live tally */
+.tally { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 16px; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.tally__rejected { color: var(--reject); font-weight: 600; }
+.tally__undo { font-size: 12px; padding: 0; }
+.tally__undo:disabled { color: var(--text-faint); text-decoration: none; cursor: default; }
