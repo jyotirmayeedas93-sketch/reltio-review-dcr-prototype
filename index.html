@@ -83,6 +83,38 @@
         </table>
       </div>
     </main>
+
+    <!-- Review DCR side panel: opens over the Inbox, keeps the queue visible -->
+    <aside class="panel" id="review-panel" aria-labelledby="panel-title" hidden>
+      <div class="panel__header">
+        <button type="button" class="icon-btn" id="close-panel" aria-label="Close review panel">
+          <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+        <h2 class="panel__title" id="panel-title" tabindex="-1">Data Change Request Review</h2>
+      </div>
+      <div class="panel__tabs" role="presentation">
+        <span class="panel-tab is-active">Information</span>
+        <span class="panel-tab">Additional details</span>
+        <span class="panel-tab">Comments</span>
+      </div>
+      <div class="panel__scroll">
+        <div class="entity">
+          <span class="entity__avatar" aria-hidden="true">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M4 20V5h10v15M14 9h6v11M7 8h2M7 11h2M7 14h2M10 8h1M10 11h1M10 14h1M16 12h2M16 15h2M3 20h18"/></svg>
+          </span>
+          <div>
+            <p class="entity__name" id="entity-name"></p>
+            <p class="entity__meta"><span class="entity__type" id="entity-type"></span> <span id="entity-id"></span></p>
+          </div>
+        </div>
+        <div id="panel-summary"></div>
+        <ul class="changes" id="changes" aria-label="Proposed changes"></ul>
+      </div>
+      <div class="panel__actions" id="panel-actions">
+        <button type="button" class="btn btn--reject" id="reject-dcr">Reject</button>
+        <button type="button" class="btn btn--approve" id="approve-dcr">Approve</button>
+      </div>
+    </aside>
   </div>
 
   <script src="data.js"></script>

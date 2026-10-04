@@ -58,9 +58,71 @@
     $("#task-total").textContent = `${count} tasks`;
   }
 
+  // ---------- Review panel ----------
+  const CHANGE_LABEL = { updated: "Updated", added: "Added", deleted: "Deleted" };
+  const panel = $("#review-panel");
+
+  function valuesHTML(f) {
+    if (f.change === "added") {
+      return `<span class="sr-only">New value:</span><span class="val-new">${esc(f.proposed)}</span>`;
+    }
+    if (f.change === "deleted") {
+      return `<span class="sr-only">Value to be removed:</span><span class="val-removed">${esc(f.original)}</span>`;
+    }
+    return `
+      <span class="sr-only">Changes from</span><span class="val-old">${esc(f.original)}</span>
+      <span class="arrow" aria-hidden="true">→</span>
+      <span class="sr-only">to</span><span class="val-new">${esc(f.proposed)}</span>`;
+  }
+
+  function changeHTML(f) {
+    return `
+      <li class="change" id="change-${f.id}" data-id="${f.id}">
+        <div class="change__head">
+          <span class="change__label">${esc(f.label)}</span>
+          <span class="tag tag--${f.change}">${CHANGE_LABEL[f.change]}</span>
+          <span class="change__spacer"></span>
+        </div>
+        <div class="change__values">${valuesHTML(f)}</div>
+      </li>`;
+  }
+
+  function renderPanel() {
+    $("#entity-name").textContent = dcr.entityName;
+    $("#entity-type").textContent = dcr.entityType;
+    $("#entity-id").textContent = dcr.entityId;
+    $("#changes").innerHTML = state.fields.map(changeHTML).join("");
+  }
+
+  function openPanel() {
+    renderPanel();
+    panel.hidden = false;
+    const row = $('tr[data-task="dcr"]');
+    if (row) row.classList.add("is-selected");
+    $("#panel-title").focus();
+  }
+
+  function closePanel() {
+    panel.hidden = true;
+    const row = $('tr[data-task="dcr"]');
+    if (row) row.classList.remove("is-selected");
+    const opener = $("#open-dcr");
+    if (opener) opener.focus();
+  }
+
+  // ---------- Events ----------
+  $("#task-rows").addEventListener("click", (e) => {
+    if (e.target.closest("#open-dcr")) openPanel();
+  });
+  $("#close-panel").addEventListener("click", closePanel);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !panel.hidden) closePanel();
+  });
+
   // ---------- Boot ----------
   $("#reset-demo").addEventListener("click", () => {
     state = freshState();
+    panel.hidden = true;
     renderInbox();
   });
 
