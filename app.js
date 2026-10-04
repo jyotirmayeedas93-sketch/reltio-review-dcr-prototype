@@ -304,7 +304,13 @@
     f.expanded = true;
     renderPanel();
     const el = $(`#change-${f.id}`);
-    el.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    // Scroll only the panel's list, never the page.
+    const list = $(".panel__scroll");
+    const offset = el.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+    list.scrollTo({
+      top: offset - (list.clientHeight - el.offsetHeight) / 2,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
     el.focus({ preventScroll: true });
     el.classList.add("is-flash");
     setTimeout(() => el.classList.remove("is-flash"), 1200);
