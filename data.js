@@ -19,6 +19,17 @@ window.DEMO = {
     step: "DCR Review",
   },
 
+  // Clip 2 (interaction spec): "Simulate → Profile merged". The profile was merged into another one
+  // after the DCR was created. changed: rows whose CURRENT value is different on the merged profile;
+  // done: rows whose suggested value the merged profile already has.
+  merge: {
+    into: { name: "Groton-Mystic Falcons Inc", id: "0LM2a9X" },
+    by: "A. Rao",
+    on: "Jan 24, 2025",
+    changed: { companyType: "General Partnership", employees: "285" },
+    done: ["city"],
+  },
+
   // change (what the REQUESTER did): "added" | "edited" | "deleted".
   // "Updated" is never in the data: it marks a value the REVIEWER changed in Review DCR.
   // confidence: "high" | "review" | "notvalidated"

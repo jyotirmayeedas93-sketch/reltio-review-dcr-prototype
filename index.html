@@ -243,6 +243,7 @@
     <div class="review__header">
       <button type="button" class="icon-btn" id="close-review" aria-label="Close Review DCR"><span data-icon="close" data-size="20"></span></button>
       <h2 class="review__title" id="review-title">Review DCR</h2>
+      <span class="draft-status" id="draft-status" hidden></span>
       <div class="review__actions" id="review-actions"></div>
     </div>
     <div class="review__body">
@@ -327,6 +328,16 @@
     <span>Prototype · demo data</span>
     <a class="link-btn" id="switch-view" href="#inbox">Open Inbox</a>
     <button type="button" class="link-btn" id="reset-demo">Reset demo</button>
+    <label class="proto-sim"><span class="sr-only">Simulate a scenario</span>
+      <select id="simulate">
+        <option value="">Simulate…</option>
+        <option value="large">Large request (240 changes)</option>
+        <option value="largeFails">Large request, part fails</option>
+        <option value="merged">Profile merged</option>
+        <option value="draft">Draft restored</option>
+        <option value="submitFails">Submit fails</option>
+      </select>
+    </label>
   </div>
 
   <script src="icons.js"></script>

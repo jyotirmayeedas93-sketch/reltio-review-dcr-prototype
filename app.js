@@ -11,7 +11,7 @@
 (function () {
   "use strict";
 
-  const { dcr, fields: SEED, tasks: TASKS, totalTasks, user, profile } = window.DEMO;
+  const { dcr, fields: SEED, tasks: TASKS, totalTasks, user, profile, merge: MERGE } = window.DEMO;
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const icon = window.icon;
@@ -50,6 +50,12 @@
       dueMsg: null,           // P9: { level: "error"|"warning", text } under the typed due date
       rejecting: null,        // field id whose inline rejection reason box is open (R14)
       drafts: {},             // unsent rejection reasons per field id (kept when another box opens)
+      merge: null,            // Clip 2: { checked: Set } once the profile was merged into another one
+      submit: null,           // Clip 5: { kind: "approved"|"resubmitted", phase: "sending"|"failed" }
+      simFail: 0,             // Clip 5 (Simulate): how many submit attempts fail before one goes through
+      draft: { savedAt: null, sig: "", status: "idle" }, // Clip 4: the review saves itself as a draft
+      draftBanner: null,      // Clip 4: { n, at } while a restored draft is shown in this open review
+      loading: null,          // Clip 1: { total, loaded, signals: bool, failed, slow, failAt } while a big request loads
       seq: 0,
     };
   }
@@ -105,6 +111,7 @@
   function tally() {
     const t = { edited: 0, added: 0, deleted: 0, rejected: 0 };
     state.fields.forEach((f) => {
+      if (f.done) return; // already on the merged profile: not part of the approval
       if (f.status === "rejected") t.rejected++;
       else if (f.change === "added") t.added++;
       else if (f.change === "deleted") t.deleted++;
@@ -120,6 +127,351 @@
   function summaryText() {
     const c = confCounts();
     return `${c.high} clear · ${c.review} needs review · ${c.notvalidated} no signal`;
+  }
+  // ---------- Clip 2: profile merged while the request waited ----------
+  // Every row is checked again against the merged profile: unaffected rows keep their decisions,
+  // rows whose current value changed are flagged and must be decided again, rows the merged profile
+  // already has are left out of the approval.
+  function applyMerge() {
+    state.merge = { checked: new Set() };
+    state.fields.forEach((f) => {
+      if (MERGE.done.includes(f.id)) { f.done = true; f.original = f.proposed; f.value = f.proposed; f.status = "pending"; return; }
+      const now = MERGE.changed[f.id];
+      if (now === undefined) return;
+      f.prevDecision = f.status === "rejected" ? "You had rejected this." : f.value !== f.proposed ? `You had changed this to ${fmt(f.value)}.` : null;
+      if (f.status === "rejected") state.comments = state.comments.filter((c) => c.fieldId !== f.id);
+      f.wasOriginal = f.original; f.original = now; f.value = f.proposed; f.status = "pending"; f.mergeFlag = true;
+    });
+  }
+  const toCheck = () => state.merge ? state.fields.filter((f) => f.mergeFlag && f.status !== "rejected" && f.value === f.proposed && !state.merge.checked.has(f.id)) : [];
+  function mergeBannerHTML() {
+    const n = toCheck().length;
+    return `
+      <section class="mbanner" aria-labelledby="mbanner-title" tabindex="-1" id="mbanner">
+        ${icon("error_outline", 20)}
+        <div class="mbanner__body">
+          <h3 class="mbanner__title" id="mbanner-title">This profile was merged into another profile</h3>
+          <p class="mbanner__text">${esc(dcr.entityName)} was merged into ${esc(MERGE.into.name)} (ID ${esc(MERGE.into.id)}) on ${esc(MERGE.on)} by ${esc(MERGE.by)}. Approved changes will be applied to the merged profile.</p>
+          <p class="mbanner__actions">
+            <a class="link-btn" href="#profile" target="_blank" rel="noopener">View merged profile<span class="sr-only"> (opens in a new tab)</span></a>
+            ${n ? `<button type="button" class="link-btn" data-action="merge-next">Show ${n} to check</button>`
+                : `<span class="mbanner__ok">${icon("check", 16)}All changes affected by the merge are checked.</span>`}
+          </p>
+        </div>
+      </section>`;
+  }
+  function mergeFlagHTML(f) {
+    if (!f.mergeFlag) return "";
+    const what = `current value was ${esc(fmt(f.wasOriginal))}, now ${esc(fmt(f.original))}.`;
+    if (!toCheck().includes(f))
+      return `<p class="mflag mflag--done" id="mflag-${f.id}">${icon("check", 16)}<span>Changed by merge: ${what} ${f.status === "rejected" ? "Rejected after checking." : f.value !== f.proposed ? "Checked and changed." : "Checked and kept."}</span></p>`;
+    return `
+      <div class="mflag" id="mflag-${f.id}">
+        ${icon("error_outline", 16)}
+        <p class="mflag__text"><strong>Changed by merge:</strong> ${what} ${f.prevDecision ? esc(f.prevDecision) + " " : ""}Check this change again.</p>
+        <button type="button" class="text-btn text-btn--primary" data-action="merge-keep" aria-describedby="mflag-${f.id}">Keep change<span class="sr-only"> to ${esc(f.label)}</span></button>
+      </div>`;
+  }
+  function focusNextToCheck(msg) {
+    const next = toCheck()[0];
+    const el = next ? review.querySelector(`.erow[data-id="${next.id}"] [data-action="merge-keep"]`) : $("#mbanner");
+    if (el) { scrollWithin($("#review-main"), el.closest(".erow") || el); el.focus({ preventScroll: true }); }
+    if (msg) announce(msg);
+  }
+  // ---------- Clip 1: loading a large request ----------
+  // A request with 240 changes arrives in batches of 50. Nothing shows for the first 300 ms (no flash on
+  // fast loads), then a skeleton. Loaded rows can be acted on straight away; Approve waits until every
+  // row and its confidence signal is in. A part that fails to load keeps what loaded and retries only the rest.
+  function bigRequest() {
+    const CITY = ["Groton", "New London", "Mystic", "Ledyard", "Stonington"];
+    const MGR = ["Dana Whitfield", "Luis Ortega", "Priya Nair", "Tom Becker", "Aisha Khan", "Mei Lin", "Owen Price", "Sara Holm"];
+    const REVIEW = [5, 38, 77, 121, 160, 199, 233], NOSIG = [64, 182];
+    const attrs = [
+      ["address", "Address Line 1", (k) => `${10 + k} Main Street`, (k) => `${10 + k}A Main Street`, "Matches a standardised postal address."],
+      ["city", "City", (k) => CITY[k % 5], (k) => CITY[(k + 1) % 5], "Consistent with the postal code on this record."],
+      ["postal", "Postal Code", (k) => `063${40 + (k % 10)}`, (k) => `063${41 + (k % 9)}`, "Valid postal code for the city."],
+      ["phone", "Phone", (k) => `+1 860 555 ${String(1000 + k * 7).slice(-4)}`, (k) => `+1 860 555 ${String(2000 + k * 7).slice(-4)}`, "Valid US number for this area."],
+      ["hours", "Opening Hours", () => "Mon–Fri 9:00–17:00", () => "Mon–Sat 9:00–17:00", "Matches the hours on the location's website."],
+      ["manager", "Manager", (k) => MGR[k % 8], (k) => MGR[(k + 3) % 8], "Name matches the staff directory."],
+    ];
+    const rows = [];
+    for (let k = 1; k <= 40; k++) attrs.forEach(([key, name, oldV, newV, why]) => {
+      const i = rows.length;
+      const change = i % 23 === 7 ? "deleted" : i % 9 === 4 ? "added" : "edited";
+      const confidence = REVIEW.includes(i) ? "review" : NOSIG.includes(i) ? "notvalidated" : "high";
+      rows.push({ id: `L${k}-${key}`, label: `Location ${String(k).padStart(2, "0")} · ${name}`, change,
+        original: change === "added" ? null : oldV(k), proposed: change === "deleted" ? null : newV(k), confidence,
+        reasoning: confidence === "review" ? "Doesn't match the other values for this location. Confirm with the requester before approving."
+          : confidence === "notvalidated" ? "No external source available to check this value." : why,
+        value: change === "deleted" ? null : newV(k), status: "pending", whyOpen: false });
+    });
+    return rows;
+  }
+  const loadingNow = () => !!state.loading && (state.loading.loaded < state.loading.total || !state.loading.signals);
+  const shownFields = () => state.loading ? state.fields.slice(0, state.loading.loaded) : state.fields;
+  const skelRow = () => `
+      <li class="erow erow--skel" aria-hidden="true">
+        <span class="skel skel--chip"></span>
+        <div class="erow__content"><span class="skel skel--label"></span><span class="skel skel--old"></span><span class="skel skel--field"></span><span class="skel skel--tag"></span></div>
+      </li>`;
+  function loadTailHTML() {
+    const L = state.loading;
+    if (!L || L.loaded >= L.total) return "";
+    if (L.failed) return `
+      <li class="load-fail" id="load-fail">
+        ${icon("error_outline", 18)}<span>${L.total - L.loaded} changes couldn't load. The ones above are ready to review.</span>
+        <button type="button" class="text-btn text-btn--primary" data-action="load-retry">Retry</button>
+      </li>`;
+    return L.visible ? skelRow().repeat(L.loaded ? 3 : 6) : "";
+  }
+  function progressHTML() {
+    const L = state.loading;
+    if (!L || !L.visible || (L.loaded >= L.total && L.signals)) return "";
+    const text = L.failed ? `${L.loaded} of ${L.total} loaded` : !L.loaded ? `Loading ${L.total} changes…` : L.loaded < L.total ? `${L.loaded} of ${L.total} loaded` : `All ${L.total} changes loaded · checking signals…`;
+    if (L.failed) return `
+      <p class="load-progress load-progress--failed" id="load-progress">${icon("error_outline", 16)}
+        <span>${L.loaded} of ${L.total} loaded. <strong>${L.total - L.loaded} changes couldn't load.</strong> You can review the loaded ones meanwhile.</span>
+        <button type="button" class="link-btn" data-action="load-retry">Retry</button></p>`;
+    return `<p class="load-progress" id="load-progress"><span class="spinner" aria-hidden="true"></span><span>${text}${L.slow ? ". Large requests can take up to 30 seconds." : ""}</span></p>`;
+  }
+  // Update the parts that change per batch without re-rendering rows the reviewer may be working in
+  function paintLoading() {
+    if (!review.open || state.viewing) return;
+    const list = review.querySelector(".edit-rows");
+    if (!list) return;
+    list.querySelectorAll(".erow--skel, .load-fail").forEach((n) => n.remove());
+    const ids = new Set(state.fields.map((f) => f.id));
+    const have = [...list.querySelectorAll(".erow[data-id]")].filter((r) => ids.has(r.dataset.id)).length;
+    const next = shownFields().slice(have);
+    list.insertAdjacentHTML("beforeend", next.map(erowHTML).join("") + loadTailHTML());
+    list.setAttribute("aria-busy", String(loadingNow()));
+    const prog = $("#load-progress"), ph = progressHTML();
+    if (prog) prog.outerHTML = ph || ""; else if (ph) review.querySelector(".sc__title").insertAdjacentHTML("afterend", ph);
+    $("#req-summary").innerHTML = tallyHTML();
+    review.querySelector(".ai-summary").innerHTML = aiSummaryInner();
+    const keepFocus = review.querySelector(".review__actions")?.contains(document.activeElement) ? document.activeElement.dataset.action : null;
+    $("#review-actions").innerHTML = actionsHTML("dialog");
+    if (keepFocus) review.querySelector(`.review__actions [data-action="${keepFocus}"]`)?.focus();
+  }
+  let loadTimers = [];
+  function startLoading({ failAt = 0 } = {}) {
+    loadTimers.forEach(clearTimeout); loadTimers = [];
+    state.fields = bigRequest();
+    state.loading = { total: state.fields.length, loaded: 0, signals: false, failed: false, slow: false, visible: false, failAt };
+    const L = state.loading;
+    const later = (ms, fn) => loadTimers.push(setTimeout(() => { if (state.loading === L) fn(); }, ms));
+    later(300, () => { L.visible = true; paintLoading(); });
+    later(8000, () => { if (loadingNow() && !L.failed && !L.retried) { L.slow = true; paintLoading(); } });
+    const batch = (n) => later(900, () => {
+      const upTo = Math.min(L.total, 50 * n);
+      if (L.failAt && upTo > L.failAt) { L.loaded = L.failAt; L.failed = true; paintLoading(); announce(`${L.loaded} of ${L.total} changes loaded. ${L.total - L.loaded} couldn't load. Retry is at the top of the list.`); return; }
+      L.loaded = upTo; paintLoading();
+      if (upTo < L.total) batch(n + 1);
+      else later(1000, () => finishSignals());
+    });
+    batch(1);
+  }
+  function finishSignals() {
+    const L = state.loading; L.signals = true; L.slow = false; paintLoading();
+    const c = confCounts();
+    announce(`${L.total} changes loaded. ${c.review} need review, ${c.notvalidated} with no signal.`);
+  }
+  function retryLoad() {
+    const L = state.loading; L.failed = false; L.failAt = 0; L.slow = false; L.retried = true; paintLoading();
+    loadTimers.push(setTimeout(() => { if (state.loading !== L) return; L.loaded = L.total; paintLoading(); loadTimers.push(setTimeout(() => state.loading === L && finishSignals(), 1000)); }, 1200));
+  }
+  function tallyHTML() {
+    const t = tally(), d = dcr, busy = loadingNow();
+    const n = (k) => busy ? `<span class="tally__n skel skel--n" aria-hidden="true"></span><span class="sr-only">loading</span>` : `<span class="tally__n">${t[k]}</span>`;
+    return `
+        <p class="req-summary__id"><strong>DCR ID: ${esc(d.dcrId)}</strong><span>Created by ${esc(d.createdBy)}  ·  ${esc(d.createdOn)}  ·  Step: ${esc(d.step)}</span></p>
+        <p class="tally tally--edited">${n("edited")}<span class="tally__l">Edited</span></p>
+        <p class="tally tally--added">${n("added")}<span class="tally__l">Added</span></p>
+        <p class="tally tally--deleted">${n("deleted")}<span class="tally__l">Deleted</span></p>
+        <p class="tally tally--rejected">${n("rejected")}<span class="tally__l">Rejected</span></p>`;
+  }
+  const aiSummaryInner = () => `${icon("ai", 18)}<span>${loadingNow() ? "Checking signals…" : summaryText()}</span><span class="ai-summary__right">Confidence updates as you edit</span>`;
+  function showActionsNote(btn, msg) {
+    const box = btn.closest(".review__actions, .panel__actions") || btn.parentElement;
+    box.querySelector(".actions-note")?.remove();
+    const note = document.createElement("p");
+    note.className = "actions-note"; note.textContent = msg; note.setAttribute("aria-hidden", "true");
+    box.prepend(note);
+    clearTimeout(noteTimer); noteTimer = setTimeout(() => note.remove(), 5000);
+    announce(msg);
+  }
+
+  // ---------- Clip 4: draft restored ----------
+  // Every decision, edit and reason saves itself (no Save button). The draft is kept with the task
+  // (here: the browser's localStorage, so it also survives a reload) until the request is decided,
+  // discarded or the demo is reset. Reopening a review with a draft says so and marks the changed rows.
+  const DRAFT_KEY = "rdcr-draft-v1";
+  const store = {
+    get() { try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || "null"); } catch (e) { return null; } },
+    set(v) { try { localStorage.setItem(DRAFT_KEY, JSON.stringify(v)); return true; } catch (e) { return false; } },
+    clear() { try { localStorage.removeItem(DRAFT_KEY); } catch (e) { /* private mode */ } },
+  };
+  // What the reviewer has decided so far, one entry per row they changed
+  function draftChanges() {
+    return [
+      ...state.fields.filter((f) => f.status === "rejected" || f.value !== f.proposed).map((f) => ({ id: f.id, label: f.label })),
+      ...state.extra.filter((x) => x.value).map((x) => ({ id: x.id, label: field(x.of).label })),
+      ...state.newAttrs.filter(newAttrChanged).map((r) => ({ id: r.id, label: r.attr })),
+    ];
+  }
+  const draftData = () => ({ fields: state.fields.map((f) => ({ id: f.id, value: f.value, status: f.status })), comments: state.comments,
+    extra: state.extra, newAttrs: state.newAttrs, drafts: state.drafts, seq: state.seq });
+  const draftWhen = (d) => {
+    const t = new Date(d), today = new Date(); const y = new Date(today); y.setDate(today.getDate() - 1);
+    const time = t.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    if (t.toDateString() === today.toDateString()) return `today, ${time}`;
+    if (t.toDateString() === y.toDateString()) return `yesterday, ${time}`;
+    return `${t.getDate()} ${MONTHS[t.getMonth()].slice(0, 3)}, ${time}`;
+  };
+  let saveTimer = null;
+  function paintDraftStatus() {
+    const el = $("#draft-status");
+    const show = review.open && !state.viewing && !state.resolved && state.draft.status !== "idle";
+    el.hidden = !show;
+    if (!show) return;
+    el.className = `draft-status draft-status--${state.draft.status}`;
+    el.innerHTML = state.draft.status === "saving" ? `<span class="spinner" aria-hidden="true"></span>Saving…`
+      : state.draft.status === "failed" ? `${icon("error_outline", 16)}Not saved`
+      : `${icon("check", 16)}Draft saved`;
+    el.title = state.draft.savedAt ? `Saved ${draftWhen(state.draft.savedAt)}` : "";
+  }
+  function trackDraft() {
+    if (state.resolved || state.viewing) return;
+    const sig = JSON.stringify(draftData());
+    if (sig === state.draft.sig) return;
+    state.draft.sig = sig;
+    clearTimeout(saveTimer);
+    if (!draftChanges().length && !state.comments.length) {
+      store.clear(); state.draft.savedAt = null; state.draft.status = "idle";
+      paintDraftStatus(); renderInbox(); renderWorkflow(); return;
+    }
+    state.draft.status = "saving"; paintDraftStatus();
+    saveTimer = setTimeout(saveDraft, 700);
+  }
+  function saveDraft() {
+    saveTimer = null;
+    const at = Date.now();
+    if (store.set({ ...draftData(), savedAt: at })) { state.draft.savedAt = at; state.draft.status = "saved"; }
+    else state.draft.status = "failed";
+    paintDraftStatus(); renderInbox(); renderWorkflow();
+  }
+  // Leaving (closing the review or the page) never waits for the timer
+  const flushDraft = () => { if (saveTimer) { clearTimeout(saveTimer); saveDraft(); } };
+  addEventListener("pagehide", flushDraft);
+  function loadDraft(d) {
+    d.fields.forEach((s) => { const f = field(s.id); if (f) { f.value = s.value; f.status = s.status; } });
+    Object.assign(state, { comments: d.comments || [], extra: d.extra || [], newAttrs: d.newAttrs || [], drafts: d.drafts || {}, seq: d.seq || 0 });
+    state.draft = { savedAt: d.savedAt, sig: JSON.stringify(draftData()), status: "saved" };
+  }
+  function draftBannerHTML() {
+    const b = state.draftBanner;
+    if (!b) return "";
+    return `
+      <section class="dbanner" aria-labelledby="dbanner-title" id="dbanner" tabindex="-1">
+        ${icon("refresh_date", 20)}
+        <div class="dbanner__body">
+          <h3 class="dbanner__title" id="dbanner-title">Draft restored · ${b.n} ${b.n === 1 ? "decision" : "decisions"}</h3>
+          <p class="dbanner__text">Saved ${esc(draftWhen(b.at))}. Pick up where you left off; rows in your draft are marked.</p>
+        </div>
+        <span class="dbanner__actions">
+          <button type="button" class="link-btn" data-action="draft-show">Show changes</button>
+          <button type="button" class="link-btn" data-action="draft-discard">Discard draft</button>
+        </span>
+      </section>`;
+  }
+  const inDraft = (id) => !!state.draftBanner && draftChanges().some((c) => c.id === id);
+  function discardDraft() {
+    const n = draftChanges().length;
+    confirmDialog({ title: `Discard ${n} ${n === 1 ? "decision" : "decisions"}?`,
+      text: "Your rejections, reasons and edits in this draft will be removed. This can't be undone.", ok: "Discard", cancel: "Keep draft" })
+      .then((ok) => {
+        if (!ok) return;
+        const fresh = freshState();
+        Object.assign(state, { fields: fresh.fields, comments: [], extra: [], newAttrs: [], drafts: {}, rejecting: null, touched: new Set(), draftBanner: null });
+        store.clear(); state.draft = { savedAt: null, sig: "", status: "idle" };
+        renderReview(); renderInbox(); renderWorkflow();
+        $("#close-review").focus();
+        announce("Draft discarded. The request is back to how the requester sent it.");
+      });
+  }
+
+  // ---------- Clip 5: submit fails, then retry ----------
+  // A decision is sent once; while it's on its way every action waits. A dropped connection gets one
+  // silent retry. If that fails too, the dialog stays open with everything the reviewer did, and
+  // Retry sends the same decision again (same request ID on a real server, so it can't apply twice).
+  const sending = () => !!state.submit && state.submit.phase === "sending";
+  const VERB = { approved: ["Approve", "Approving…", "approve this request"], resubmitted: ["Resubmit", "Resubmitting…", "send this request back"] };
+  let offline = !navigator.onLine;
+  function submitDecision(kind) {
+    if (sending()) return;
+    if (offline) { announce(`You're offline. Your decisions are kept. ${VERB[kind][0]} when you're back online.`); return; }
+    if (!state.simFail && !state.submit) { resolve(kind); return; } // the demo's normal path stays instant; a retry shows its progress
+    state.submit = { kind, phase: "sending" };
+    renderReview();
+    review.querySelector(".review__actions .is-busy")?.focus();
+    announce(VERB[kind][1]);
+    const attempt = (n) => setTimeout(() => {
+      if (!state.submit) return;               // demo reset meanwhile
+      if (state.simFail > 0) {
+        state.simFail--;
+        if (n === 1) return attempt(2);        // one quiet retry after a short wait
+        state.submit.phase = "failed";
+        renderReview();
+        $("#retry-submit")?.focus();
+        return;
+      }
+      state.submit = null;
+      resolve(kind);
+    }, n === 1 ? 1100 : 1600);
+    attempt(1);
+  }
+  function submitBannerHTML() {
+    if (offline) return `
+      <section class="sbanner sbanner--offline" role="status" aria-labelledby="sbanner-title">
+        ${icon("error_outline", 20)}
+        <div class="sbanner__body">
+          <h3 class="sbanner__title" id="sbanner-title">You're offline</h3>
+          <p class="sbanner__text">Your decisions are kept. You can keep reviewing, and approve once you're back online.</p>
+        </div>
+      </section>`;
+    if (!state.submit || state.submit.phase !== "failed") return "";
+    const [, , what] = VERB[state.submit.kind];
+    return `
+      <section class="sbanner" role="alert" aria-labelledby="sbanner-title">
+        ${icon("error_outline", 20)}
+        <div class="sbanner__body">
+          <h3 class="sbanner__title" id="sbanner-title">Couldn't ${what}</h3>
+          <p class="sbanner__text">The connection dropped before it went through, so nothing was applied. Your decisions and comments are kept.</p>
+        </div>
+        <button type="button" class="btn btn--primary sbanner__retry" id="retry-submit" data-action="retry-submit">Try again</button>
+      </section>`;
+  }
+  addEventListener("offline", () => { offline = true; if (review.open) renderReview(); });
+  addEventListener("online", () => { offline = false; if (review.open) { renderReview(); announce("You're back online."); } });
+
+  // Approve / Resubmit while merge rows are unchecked: say why next to the button, then take the
+  // reviewer to the first row to check and pulse every row that still needs a look.
+  let noteTimer = null;
+  function blockedByMerge(btn, msg) {
+    const box = btn.closest(".review__actions, .panel__actions") || btn.parentElement;
+    box.querySelector(".actions-note")?.remove();
+    const note = document.createElement("p");
+    note.className = "actions-note"; note.textContent = msg; note.setAttribute("aria-hidden", "true"); // announced via #live
+    box.prepend(note);
+    clearTimeout(noteTimer); noteTimer = setTimeout(() => note.remove(), 5000);
+    if (!btn.closest("#review-dialog")) return announce(msg);
+    toCheck().forEach((f) => { const el = review.querySelector(`#mflag-${f.id}`); if (el) { el.classList.remove("is-pulse"); void el.offsetWidth; el.classList.add("is-pulse"); } });
+    const first = review.querySelector(`.erow[data-id="${toCheck()[0].id}"]`);
+    first.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    const keep = first.querySelector('[data-action="merge-keep"]');
+    keep.classList.add("is-target"); keep.addEventListener("blur", () => keep.classList.remove("is-target"), { once: true });
+    keep.focus({ preventScroll: true });
+    announce(msg);
   }
   const visibleTasks = () => TASKS.map((t, i) => ({ t, i })).filter(({ i }) => (i !== 0 || state.dcrInInbox) && !state.deleted.has(i));
 
@@ -141,7 +493,7 @@
           <td class="col-pri"><span class="pill pill--${PRIORITY[pri]}">${esc(pri)}</span></td>
           <td class="col-by">${esc(by)}</td>
           <td class="col-on">${esc(on)}</td>
-          <td class="col-st"><span class="status status--${slug(status)}"><span class="status__dot" aria-hidden="true"></span>${esc(status)}</span></td>
+          <td class="col-st"><span class="status status--${slug(status)}"><span class="status__dot" aria-hidden="true"></span>${esc(status)}</span>${isDcr && state.draft.savedAt ? `<span class="draft-tag">Draft</span>` : ""}</td>
           <td class="col-due">${esc(due)}</td>
         </tr>`;
     });
@@ -332,7 +684,8 @@
   const review = $("#review-dialog");
   function erowHTML(f) {
     const rejected = f.status === "rejected";
-    const locked = !!state.resolved;
+    const locked = !!state.resolved || !!f.done || sending();
+    const flagged = f.mergeFlag && toCheck().includes(f);
     const n = state.comments.filter((c) => c.fieldId === f.id).length;
     const changed = f.value !== f.proposed;
     const inputId = `val-${f.id}`;
@@ -341,11 +694,11 @@
       ? ddHTML(f.id, f.options, f.value, usedValues(f.id, f.id), rejected || locked)
       : `<input class="erow__input" id="${inputId}" data-action="edit" value="${esc(f.value == null ? "—" : f.value)}" aria-describedby="msg-${f.id}" ${invalidAttrs(fMsg)} ${rejected || locked || f.change === "deleted" ? 'readonly aria-readonly="true"' : ""}>`;
     return `
-      <li class="erow${rejected ? " erow--rejected" : ""}" data-id="${f.id}">
+      <li class="erow${rejected ? " erow--rejected" : ""}${flagged ? " erow--flag" : ""}${f.done ? " erow--done" : ""}" data-id="${f.id}">
         ${confChip(f, "d")}
         <div class="erow__content">
-          <label class="erow__label" id="lbl-${f.id}" for="${inputId}">${esc(f.label)}</label>
-          <span class="erow__old${f.change === "deleted" ? " erow__old--removed" : ""}"><span class="sr-only">Current value: </span>${esc(fmt(f.original))}</span>
+          <label class="erow__label" id="lbl-${f.id}" for="${inputId}">${inDraft(f.id) ? `<span class="draft-dot" aria-hidden="true" title="In your draft"></span>` : ""}${esc(f.label)}${inDraft(f.id) ? `<span class="sr-only"> (in your draft)</span>` : ""}</label>
+          <span class="erow__old${f.change === "deleted" ? " erow__old--removed" : ""}"><span class="sr-only">Current value${f.mergeFlag || f.done ? " on the merged profile" : ""}: </span>${esc(fmt(f.original))}</span>
           <span class="erow__arrow" aria-hidden="true">→</span>
           <span class="erow__field">${fieldCtl}</span>
           <span class="erow__tools">
@@ -353,13 +706,14 @@
             ${changed && !rejected && !locked ? `<button type="button" class="icon-btn" data-action="revert" aria-label="Revert ${esc(f.label)} to the requester's value">${icon("undo", 20)}</button>` : ""}
           </span>
           <span class="erow__end">
-            ${tagHTML(f)}
-            ${rejected
+            ${f.done ? `<span class="done-chip">Already on merged profile</span>` : tagHTML(f)}
+            ${f.done ? "" : rejected
               ? `<button type="button" class="rejected-chip" data-action="unreject" ${locked ? "disabled" : ""} aria-label="Rejected. Undo rejection of ${esc(f.label)}">Rejected${icon("clear", 14)}</button>`
-              : locked ? "" : `<button type="button" class="btn-xs" data-action="reject-field" aria-expanded="${state.rejecting === f.id}" aria-controls="reason-${f.id}">Reject<span class="sr-only"> ${esc(f.label)}</span></button>`}
+              : locked ? "" : `<button type="button" class="btn-xs" data-action="reject-field" aria-expanded="${state.rejecting === f.id}" aria-controls="reason-${f.id}"${flagged ? ` aria-describedby="mflag-${f.id}"` : ""}>Reject<span class="sr-only"> ${esc(f.label)}</span></button>`}
           </span>
         </div>
         ${f.options ? "" : msgHTML(f.id, fMsg)}
+        ${state.merge ? mergeFlagHTML(f) : ""}
         ${whyHTML(f, "d")}
         ${reasonHTML(f)}
         ${n ? `<button type="button" class="comment-pin" data-action="show-comments" aria-label="${n} ${n === 1 ? "comment" : "comments"} on ${esc(f.label)}">${icon("mode_comment", 18)}<span class="comment-pin__n" aria-hidden="true">${n}</span></button>` : ""}
@@ -569,14 +923,30 @@
   // Approve becomes Resubmit (DS Button, Primary variant): rejected fields go back to the
   // requester with their comments, the rest are applied.
   function actionsHTML(from) {
+    if (sending()) {
+      const [, busy] = VERB[state.submit.kind];
+      return `
+      <button type="button" class="btn btn--reject" disabled>Reject</button>
+      <button type="button" class="btn ${state.submit.kind === "approved" ? "btn--approve" : "btn--primary"} is-busy" aria-disabled="true" aria-busy="true"><span class="spinner" aria-hidden="true"></span>${busy}</button>`;
+    }
     const n = tally().rejected;
+    if (loadingNow()) {
+      const tip = `Available once all ${state.loading.total} changes have loaded`;
+      return `
+      <button type="button" class="btn btn--reject" data-action="reject-request" data-from="${from}" aria-haspopup="dialog"${n ? " disabled" : ""}>Reject</button>
+      <button type="button" class="btn ${n ? "btn--primary" : "btn--approve"} is-blocked" data-action="${n ? "resubmit" : "approve"}" title="${tip}" aria-describedby="load-hint-${from}">${n ? "Resubmit" : "Approve"}</button>
+      <span class="sr-only" id="load-hint-${from}">${tip}.</span>`;
+    }
+    const c = toCheck().length;
+    const blk = c ? ` is-blocked" aria-describedby="merge-hint-${from}" title="Check the ${c === 1 ? "change" : `${c} changes`} affected by the merge first.` : "";
+    const mhint = c ? `<span class="sr-only" id="merge-hint-${from}">Check the ${c === 1 ? "change" : `${c} changes`} affected by the merge first.</span>` : "";
     if (!n) return `
       <button type="button" class="btn btn--reject" data-action="reject-request" data-from="${from}" aria-haspopup="dialog">Reject</button>
-      <button type="button" class="btn btn--approve" data-action="approve">Approve</button>`;
+      <button type="button" class="btn btn--approve${blk}" data-action="approve">Approve</button>${mhint}`;
     const hint = `actions-hint-${from}`;
     return `
       <button type="button" class="btn btn--reject" disabled aria-describedby="${hint}" title="Field rejections are in progress. Resubmit sends them back to the requester.">Reject</button>
-      <button type="button" class="btn btn--primary" data-action="resubmit" aria-describedby="${hint}">Resubmit</button>
+      <button type="button" class="btn btn--primary${c ? " is-blocked" : ""}" data-action="resubmit" aria-describedby="${hint}${c ? ` merge-hint-${from}` : ""}"${c ? ` title="Check the ${c === 1 ? "change" : `${c} changes`} affected by the merge first."` : ""}>Resubmit</button>${mhint}
       <span class="sr-only" id="${hint}">${n} ${n === 1 ? "field is" : "fields are"} rejected. Resubmit sends ${n === 1 ? "it" : "them"} back to the requester with your comments and applies the other changes.</span>`;
   }
   function renderReview() {
@@ -588,26 +958,28 @@
     const t = tally();
     const r = state.resolved;
     $("#review-actions").innerHTML = r ? "" : actionsHTML("dialog");
+    $("#review-actions").classList.toggle("is-offline", offline && !r);
     $("#review-main").innerHTML = `
+      ${r ? "" : submitBannerHTML()}
+      ${r ? "" : draftBannerHTML()}
       <div class="org">
         <span class="avatar avatar--entity" aria-hidden="true">${esc(dcr.entityInitials)}</span>
-        <span class="org__name">${esc(dcr.entityName)}</span>
+        <span class="org__names"><span class="org__name">${esc(state.merge ? MERGE.into.name : dcr.entityName)}</span>${state.merge ? `<span class="org__prev">Previously ${esc(dcr.entityName)}</span>` : ""}</span>
         <span class="type-badge">${esc(dcr.entityType)}</span>
-        <span class="org__id">Entity ID: ${esc(dcr.entityId)}</span>
+        <span class="org__id">Entity ID: ${esc(state.merge ? MERGE.into.id : dcr.entityId)}</span>
         <button type="button" class="icon-btn org__toggle" data-action="toggle-org" aria-expanded="${state.orgOpen}" aria-controls="req-summary" aria-label="${state.orgOpen ? "Hide" : "Show"} request summary">${icon("keyboard_arrow_up", 24)}</button>
       </div>
       <div class="req-summary" id="req-summary" ${state.orgOpen ? "" : "hidden"}>
-        <p class="req-summary__id"><strong>DCR ID: ${esc(dcr.dcrId)}</strong><span>Created by ${esc(dcr.createdBy)}  ·  ${esc(dcr.createdOn)}  ·  Step: ${esc(dcr.step)}</span></p>
-        <p class="tally tally--edited"><span class="tally__n">${t.edited}</span><span class="tally__l">Edited</span></p>
-        <p class="tally tally--added"><span class="tally__n">${t.added}</span><span class="tally__l">Added</span></p>
-        <p class="tally tally--deleted"><span class="tally__n">${t.deleted}</span><span class="tally__l">Deleted</span></p>
-        <p class="tally tally--rejected"><span class="tally__n">${t.rejected}</span><span class="tally__l">Rejected</span></p>
+${tallyHTML()}
       </div>
+      ${state.merge && !state.resolved ? mergeBannerHTML() : ""}
       <h3 class="sc__title">Suggested Changes</h3>
+      ${progressHTML()}
       ${state.resolved ? "" : addAttrHTML()}
-      <div class="ai-summary">${icon("ai", 18)}<span>${summaryText()}</span><span class="ai-summary__right">Confidence updates as you edit</span></div>
-      <ul class="edit-rows" aria-label="Suggested changes">${state.newAttrs.map(arowHTML).join("")}${state.fields.map(erowHTML).join("")}</ul>`;
+      <div class="ai-summary">${aiSummaryInner()}</div>
+      <ul class="edit-rows" aria-label="Suggested changes" aria-busy="${loadingNow()}">${state.newAttrs.map(arowHTML).join("")}${shownFields().map(erowHTML).join("")}${loadTailHTML()}</ul>`;
     renderRail();
+    trackDraft(); paintDraftStatus();
   }
   function renderRail() {
     $("#rail-title").textContent = `Comments (${state.comments.length})`;
@@ -635,15 +1007,20 @@
     reviewOpener = document.activeElement;
     reviewOpenerSel = typeof fallbackSel === "string" ? fallbackSel
       : reviewOpener && reviewOpener.dataset && reviewOpener.dataset.action ? `[data-action="${reviewOpener.dataset.action}"]` : null;
+    const ch = draftChanges().length;
+    state.draftBanner = !state.viewing && !state.resolved && ch && state.draft.savedAt ? { n: ch, at: state.draft.savedAt } : null;
     renderReview();
     review.showModal();
+    paintDraftStatus();
     $("#close-review").focus();
+    if (state.draftBanner) announce(`Draft restored, ${ch} ${ch === 1 ? "decision" : "decisions"} from ${draftWhen(state.draft.savedAt)}.`);
   }
   function closeReview() {
     if (review.open) review.close();
   }
   review.addEventListener("close", () => {
-    state.viewing = null; state.histOpen = new Set(); state.rejecting = null;
+    trackDraft(); flushDraft();
+    state.viewing = null; state.histOpen = new Set(); state.rejecting = null; state.draftBanner = null; paintDraftStatus();
     $("#review-title").textContent = "Review DCR"; $("#comment-form").hidden = false; $("#rail-closed").hidden = true;
     renderPanel(); renderInbox(); renderWorkflow();
     // Return focus to whatever opened the dialog (re-rendered buttons are found again by selector)
@@ -966,7 +1343,8 @@
   function resolve(kind) {
     const t = tally();
     const added = state.extra.filter((x) => x.value).length + state.newAttrs.filter(newAttrChanged).length; // the reviewer's own additions
-    state.resolved = { kind, applied: state.fields.length - t.rejected + added, rejected: t.rejected, at: now() };
+    clearTimeout(saveTimer); saveTimer = null; store.clear(); state.draft = { savedAt: null, sig: "", status: "idle" };
+    state.resolved = { kind, applied: state.fields.filter((f) => !f.done).length - t.rejected + added, rejected: t.rejected, at: now() };
     reviewOpener = reviewOpenerSel = null; // focus goes to the snack bar, not back to the opener
     state.dcrInInbox = false;
     state.selected.delete(0);
@@ -984,10 +1362,10 @@
     const f = (n) => `${n} ${n === 1 ? "field" : "fields"}`;
     $("#toast-title").textContent = { approved: "DCR approved", resubmitted: "DCR sent for resubmission", rejected: "DCR rejected" }[r.kind];
     $("#toast-text").textContent = r.kind === "approved"
-      ? `${dcr.entityName} · ${ch(r.applied)} applied`
+      ? `${state.merge ? MERGE.into.name : dcr.entityName} · ${ch(r.applied)} applied`
       : r.kind === "resubmitted"
-        ? `${dcr.entityName} · ${f(r.rejected)} returned to ${dcr.createdBy} with your comments, ${ch(r.applied)} applied`
-        : `${dcr.entityName} · returned to ${dcr.createdBy} with your comment`;
+        ? `${state.merge ? MERGE.into.name : dcr.entityName} · ${f(r.rejected)} returned to ${dcr.createdBy} with your comments, ${ch(r.applied)} applied`
+        : `${state.merge ? MERGE.into.name : dcr.entityName} · returned to ${dcr.createdBy} with your comment`;
     toast.className = `toast toast--${r.kind}`;
     $("#toast-view").hidden = false;
     toast.hidden = false;
@@ -1630,6 +2008,7 @@
               ? `<span class="req__status req__status--${r.kind}"><span data-icon="${r.kind === "approved" ? "done" : r.kind === "rejected" ? "close_24" : "send"}" data-size="18" aria-hidden="true"></span>${RESOLVED_LABEL[r.kind]}</span>
                  <button type="button" class="btn btn--text" data-action="wf-view" aria-haspopup="dialog"><span data-icon="visibility" data-size="18"></span>View DCR</button>`
               : `<a href="#inbox" class="btn btn--text" data-action="wf-inbox"><span data-icon="open_in_new" data-size="18"></span>Open in Inbox<span class="sr-only">: DCR ${esc(dcr.dcrId)}</span></a>
+                 ${state.draft.savedAt ? `<span class="draft-tag">Draft · ${draftChanges().length} ${draftChanges().length === 1 ? "decision" : "decisions"}</span>` : ""}
                  <button type="button" class="btn btn--text" data-action="wf-review" aria-haspopup="dialog"><span data-icon="review_dcr" data-size="18"></span>Review DCR</button>`}
           </div>
           ${expanded ? `
@@ -1947,7 +2326,31 @@
       }
       case "toggle-org": state.orgOpen = !state.orgOpen; renderReview(); review.querySelector("[data-action='toggle-org']").focus(); break;
       case "reject-request": askComment({ kind: "request", from: btn.dataset.from }, "Rejecting the whole request. It goes back to the requester."); break;
+      case "merge-next": focusNextToCheck(); break;
+      case "retry-submit": submitDecision(state.submit.kind); break;
+      case "draft-discard": discardDraft(); break;
+      case "load-retry": retryLoad(); break;
+      case "draft-show": {
+        const first = draftChanges()[0];
+        const row = first && review.querySelector(`.erow[data-id="${first.id}"]`);
+        if (!row) break;
+        review.querySelectorAll(".draft-dot").forEach((d) => { d.classList.remove("is-pulse"); void d.offsetWidth; d.classList.add("is-pulse"); });
+        row.scrollIntoView({ block: "center", behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+        (row.querySelector('[data-action="unreject"], .erow__input:not([readonly]), .dd__trigger') || row).focus({ preventScroll: true });
+        announce(`${draftChanges().length === 1 ? "1 row" : `${draftChanges().length} rows`} in your draft: ${draftChanges().map((c) => c.label).join(", ")}.`);
+        break;
+      }
+      case "merge-keep": {
+        state.merge.checked.add(id);
+        renderReview();
+        const left = toCheck().length;
+        focusNextToCheck(`${field(id).label} kept. ${left ? `${left} ${left === 1 ? "change" : "changes"} left to check.` : "All changes affected by the merge are checked."}`);
+        break;
+      }
       case "approve": case "resubmit": {
+        if (loadingNow()) { showActionsNote(btn, `Available once all ${state.loading.total} changes have loaded.`); break; }
+        const c = toCheck().length;
+        if (c) { blockedByMerge(btn, `Check the ${c === 1 ? "change" : `${c} changes`} affected by the merge first.`); break; }
         const bad = blockingRows();
         if (bad.length) {
           bad.forEach((it) => state.touched.add(it.id));
@@ -1957,7 +2360,7 @@
           announce(`Fix ${bad.length === 1 ? "1 field" : `${bad.length} fields`} before you ${btn.dataset.action}.`);
           break;
         }
-        resolve(btn.dataset.action === "approve" ? "approved" : "resubmitted");
+        submitDecision(btn.dataset.action === "approve" ? "approved" : "resubmitted");
         break;
       }
     }
@@ -2033,16 +2436,48 @@
     (view === "inbox" ? $("#task-table") : toast.classList.contains("toast--suggested") ? $("#val-mode") : ($('#wf-list [data-action="wf-view"]') || $("#profile-main"))).focus();
   });
   document.querySelectorAll(".nav-item").forEach((a) => a.addEventListener("click", (e) => e.preventDefault()));
-  $("#reset-demo").addEventListener("click", () => {
+  function resetDemo() {
     unrejectId = null;
+    loadTimers.forEach(clearTimeout); loadTimers = [];
+    clearTimeout(saveTimer); saveTimer = null;
     [xdlg, udlg, cdlg, review].forEach((d) => { if (d.open) d.close(); });
-    state = freshState();
+    state = freshState(); store.clear();
     panel.hidden = true; toast.hidden = true;
     renderInbox(); renderFilterForm(); renderWorkflow(); renderMode(); renderGrid();
-    (view === "profile" ? $('#wf-list [data-action="wf-review"]') : $("#open-dcr")).focus();
+  }
+  const reviewTrigger = () => (view === "profile" ? '#wf-list [data-action="wf-review"]' : "#open-dcr");
+  $("#reset-demo").addEventListener("click", () => { resetDemo(); $(reviewTrigger()).focus(); });
+  // Prototype control: replay a not-happy path from the interaction spec, the same way every time
+  const SIMULATE = {
+    merged: () => { applyMerge(); $(reviewTrigger()).focus(); openReview(reviewTrigger()); },
+    submitFails: () => { state.simFail = 2; $(reviewTrigger()).focus(); openReview(reviewTrigger()); },
+    large: () => { $(reviewTrigger()).focus(); startLoading(); openReview(reviewTrigger()); },
+    largeFails: () => { $(reviewTrigger()).focus(); startLoading({ failAt: 200 }); openReview(reviewTrigger()); },
+    // A draft left yesterday afternoon: Tax ID rejected with a reason, Website and Company Type changed
+    draft: () => {
+      const y = new Date(); y.setDate(y.getDate() - 1); y.setHours(16, 12, 0, 0);
+      field("taxId").status = "rejected";
+      state.comments.push({ id: ++state.seq, fieldId: "taxId", kind: "rejection", text: "Keep the Tax ID: it's still needed for filings.",
+        at: `${String(y.getDate()).padStart(2, "0")}/${String(y.getMonth() + 1).padStart(2, "0")}/${y.getFullYear()} 04:09 PM` });
+      field("website").value = "grotonfalcons.com";
+      field("companyType").value = "Public Limited Company (PLC)";
+      store.set({ ...draftData(), savedAt: y.getTime() });
+      state.draft = { savedAt: y.getTime(), sig: JSON.stringify(draftData()), status: "saved" };
+      renderInbox(); renderWorkflow();
+      $(reviewTrigger()).focus(); openReview(reviewTrigger());
+    },
+  };
+  $("#simulate").addEventListener("change", (e) => {
+    const run = SIMULATE[e.target.value];
+    e.target.value = "";
+    if (!run) return;
+    resetDemo();
+    run();
   });
 
   // ---------- Boot ----------
+  review.addEventListener("input", () => setTimeout(trackDraft, 0)); // typed edits save too, without a re-render
+  { const d = store.get(); if (d && d.fields) loadDraft(d); }
   $("#user-avatar").textContent = user.initials;
   hydrateIcons();
   renderProfileStatic();
