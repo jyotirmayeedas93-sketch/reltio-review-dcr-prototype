@@ -28,6 +28,7 @@
       touched: new Set(),     // row ids whose value was committed (show "incomplete" errors only after that)
       newAttrs: [],           // profile attributes the REVIEWER adds with "Add attribute", one row per value: { id, attr, current, value }
       selected: new Set(),    // indices into TASKS
+      deleted: new Set(),     // I4: tasks removed with bulk Delete
       dcrInInbox: true,
       resolved: null,         // { kind: "approved"|"rejected", applied, rejected }
       pending: null,          // what the open comment dialog will do: { kind: "field", id } | { kind: "request", from }
@@ -46,6 +47,9 @@
       saved: {},              // profile values saved in Editing mode: { [card|label]: values[] }
       moreOpen: new Set(),    // profile cards expanded with "Show more"
       sug: null,              // Suggesting draft: { rows: { [attrKey]: [{ rid, orig, value, del, added }] } }
+      dueMsg: null,           // P9: { level: "error"|"warning", text } under the typed due date
+      rejecting: null,        // field id whose inline rejection reason box is open (R14)
+      drafts: {},             // unsent rejection reasons per field id (kept when another box opens)
       seq: 0,
     };
   }
@@ -117,7 +121,7 @@
     const c = confCounts();
     return `${c.high} clear · ${c.review} needs review · ${c.notvalidated} no signal`;
   }
-  const visibleTasks = () => TASKS.map((t, i) => ({ t, i })).filter(({ i }) => i !== 0 || state.dcrInInbox);
+  const visibleTasks = () => TASKS.map((t, i) => ({ t, i })).filter(({ i }) => (i !== 0 || state.dcrInInbox) && !state.deleted.has(i));
 
   // ---------- Inbox ----------
   function renderInbox() {
@@ -144,7 +148,7 @@
     $("#task-rows").innerHTML = rows.join("");
     const shown = visibleTasks().length;
     $("#inbox-count").textContent = shown;
-    $("#page-range").textContent = `1–${shown} of ${totalTasks - (state.dcrInInbox ? 0 : 1)}`;
+    $("#page-range").textContent = `1–${shown} of ${totalTasks - (state.dcrInInbox ? 0 : 1) - state.deleted.size}`;
     renderSelection();
   }
   function renderSelection() {
@@ -161,8 +165,34 @@
   // Bulk actions: tooltips on hover and focus (Esc hides them, WCAG 1.4.13). The actions aren't built yet.
   $("#bulk-actions").addEventListener("click", (e) => {
     const b = e.target.closest("[data-bulk]");
-    if (b) announce(`${b.dataset.bulk} for ${state.selected.size} selected ${state.selected.size === 1 ? "task" : "tasks"} isn't part of this prototype yet.`);
+    if (!b) return;
+    if (b.dataset.bulk === "Delete") { bulkDelete(); return; }
+    announce(`${b.dataset.bulk} for ${state.selected.size} selected ${state.selected.size === 1 ? "task" : "tasks"} isn't part of this prototype yet.`);
   });
+  /* I4 (interaction spec): Delete can't be undone, so it always confirms (Cancel has focus), then a snack bar
+     reports the result. A data change request can't be deleted, only rejected, so it is left out and kept
+     selected, and the confirm says so ("Delete applies to 2 of 3 selected tasks"). */
+  function bulkDelete() {
+    const sel = [...state.selected], eligible = sel.filter((i) => i !== 0), n = sel.length, k = eligible.length;
+    const tasks = (x) => `${x} ${x === 1 ? "task" : "tasks"}`;
+    const kept = n - k ? ` Delete applies to ${k} of ${n} selected tasks: data change requests can only be rejected.` : "";
+    if (!k) { bulkToast("Nothing deleted", "Data change requests can't be deleted. Reject them instead.", "rejected"); return; }
+    confirmDialog({ title: `Delete ${tasks(k)}?`, text: `This can't be undone.${kept}`, ok: "Delete", cancel: "Cancel" }).then((ok) => {
+      if (!ok) return;
+      eligible.forEach((i) => { state.deleted.add(i); state.selected.delete(i); });
+      renderInbox();
+      $("#task-table").focus();
+      bulkToast(`${tasks(k)} deleted`, n - k ? `${n - k} data change request is still selected.` : "Deleted tasks can't be restored.", "deleted");
+    });
+  }
+  function bulkToast(title, text, kind) {
+    $("#toast-title").textContent = title;
+    $("#toast-text").textContent = text;
+    $("#toast-view").hidden = true;
+    toast.className = `toast toast--${kind}`;
+    toast.hidden = false;
+    announce(`${title}. ${text}`);
+  }
   $("#bulk-actions").addEventListener("keydown", (e) => {
     const w = e.target.closest(".tip-wrap");
     if (e.key === "Escape" && w && !w.classList.contains("tip-off")) { e.stopPropagation(); w.classList.add("tip-off"); }
@@ -326,13 +356,55 @@
             ${tagHTML(f)}
             ${rejected
               ? `<button type="button" class="rejected-chip" data-action="unreject" ${locked ? "disabled" : ""} aria-label="Rejected. Undo rejection of ${esc(f.label)}">Rejected${icon("clear", 14)}</button>`
-              : locked ? "" : `<button type="button" class="btn-xs" data-action="reject-field" aria-haspopup="dialog">Reject<span class="sr-only"> ${esc(f.label)}</span></button>`}
+              : locked ? "" : `<button type="button" class="btn-xs" data-action="reject-field" aria-expanded="${state.rejecting === f.id}" aria-controls="reason-${f.id}">Reject<span class="sr-only"> ${esc(f.label)}</span></button>`}
           </span>
         </div>
         ${f.options ? "" : msgHTML(f.id, fMsg)}
         ${whyHTML(f, "d")}
+        ${reasonHTML(f)}
         ${n ? `<button type="button" class="comment-pin" data-action="show-comments" aria-label="${n} ${n === 1 ? "comment" : "comments"} on ${esc(f.label)}">${icon("mode_comment", 18)}<span class="comment-pin__n" aria-hidden="true">${n}</span></button>` : ""}
       </li>${extraOf(f.id).map((x) => xrowHTML(f, x)).join("")}`;
+  }
+  /* R14 (interaction spec, option b): the reason for a field rejection is written in a box under the row,
+     so the value and its signal stay in view. A reason is required; Ctrl/Cmd+Enter submits, Esc cancels.
+     Only one box is open at a time; an unsent reason is kept as a draft when another row's box opens. */
+  const MOD_KEY = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? "⌘" : "Ctrl";
+  function reasonHTML(f) {
+    if (state.rejecting !== f.id || state.resolved || f.status === "rejected") return "";
+    const v = state.drafts[f.id] || "";
+    return `<div class="reason" id="reason-${f.id}">
+        <label class="reason__label" for="reason-input-${f.id}">Why are you rejecting ${esc(f.label)}?</label>
+        <textarea class="reason__input" id="reason-input-${f.id}" data-reason="${f.id}" rows="2" maxlength="1000" aria-required="true" aria-describedby="reason-hint-${f.id}">${esc(v)}</textarea>
+        <div class="reason__foot">
+          <p class="reason__hint" id="reason-hint-${f.id}">The requester sees this next to the field. ${MOD_KEY}+Enter rejects, Esc cancels.</p>
+          <p class="reason__count" ${v.length >= 900 ? "" : "hidden"}>${v.length} / 1,000</p>
+          <button type="button" class="text-btn" data-action="reason-cancel">Cancel</button>
+          <button type="button" class="text-btn text-btn--danger" data-action="reason-submit" ${v.trim() ? "" : "disabled"}>Reject field</button>
+        </div>
+      </div>`;
+  }
+  function openReason(id) {
+    state.rejecting = id;
+    renderReview();
+    const ta = $(`#reason-input-${id}`);
+    scrollWithin($("#review-main"), ta.closest(".erow"));
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  function cancelReason(id) {
+    delete state.drafts[id];
+    state.rejecting = null;
+    renderReview();
+    review.querySelector(`.erow[data-id="${id}"] [data-action="reject-field"]`)?.focus();
+    announce(`Rejection of ${field(id).label} cancelled. Nothing was rejected.`);
+  }
+  function submitReason(id) {
+    const text = (state.drafts[id] || "").trim();
+    if (!text) return;
+    delete state.drafts[id];
+    state.rejecting = null;
+    state.pending = { kind: "field", id };
+    applyComment(text);
   }
   /* DS Field + DS Menu as a select-only combobox. Values already used by another row of the
      same attribute are greyed out (DS Menu item, disabled state) and can't be picked. */
@@ -367,17 +439,97 @@
         ${f.options ? "" : msgHTML(x.id, xMsg)}
       </li>`;
   }
-  /* "Add attribute": DS Menu listing the profile attributes that aren't in this DCR yet.
-     Same select-only combobox controller as the row dropdowns. */
+  /* "Add attribute" (interaction spec R9, option b): a searchable picker. DS Menu surface with a search
+     field at the top (combobox + listbox), attributes not in this request grouped by profile card, the
+     match shown in bold. Arrow keys move, Enter adds, Esc closes. Real profiles have 100+ attributes. */
   function addAttrHTML() {
-    const list = availableAttrs();
+    const n = availableAttrs().length;
     return `<div class="add-attr-wrap" data-id="__addattr">
-      <button type="button" class="add-attr dd__trigger" id="val-__addattr" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-controls="lb-__addattr"
-        ${list.length ? "" : 'disabled title="Every profile attribute is already in this request"'}>${icon("add", 16)}<span class="dd__value">Add attribute</span><span class="dd__chev" aria-hidden="true">${icon("arrow_drop_down", 20)}</span></button>
-      <ul class="dd__menu add-attr__menu" id="lb-__addattr" role="listbox" aria-label="Profile attributes not in this request" hidden>
-        ${list.map((a, i) => `<li class="dd__item" role="option" id="opt-__addattr-${i}" data-value="${esc(a.label)}" aria-selected="false">${esc(a.label)}</li>`).join("")}
-      </ul></div>`;
+      <button type="button" class="add-attr" id="val-__addattr" aria-haspopup="listbox" aria-expanded="false" aria-controls="ap-pop"
+        ${n ? "" : 'disabled title="Every profile attribute is already in this request"'}>${icon("add", 16)}<span class="dd__value">Add attribute</span><span class="dd__chev" aria-hidden="true">${icon("arrow_drop_down", 20)}</span></button>
+      <div class="ap" id="ap-pop" hidden>
+        <div class="ap__search">${icon("search", 18)}<input type="text" id="ap-q" role="combobox" aria-expanded="true" aria-controls="ap-list" aria-autocomplete="list"
+          aria-label="Search profile attributes not in this request" placeholder="Search attributes" autocomplete="off"></div>
+        <ul class="ap__list" id="ap-list" role="listbox" aria-label="Profile attributes not in this request"></ul>
+        <p class="ap__empty" id="ap-empty" hidden></p>
+      </div></div>`;
   }
+  let ap = null, apTimer = null; // { opts, active }
+  function apGroups(q) {
+    const avail = new Set(availableAttrs().map((a) => a.label)), seen = new Set(), ql = q.trim().toLowerCase();
+    return profile.columns.flat().map((c) => ({
+      title: c.title,
+      items: cardAttrs(c).map((a) => a[0]).filter((l) => avail.has(l) && !seen.has(l) && seen.add(l) && (!ql || l.toLowerCase().includes(ql))),
+    })).filter((g) => g.items.length);
+  }
+  function apRender() {
+    const q = $("#ap-q").value, ql = q.trim().toLowerCase();
+    const hl = (l) => { if (!ql) return esc(l); const i = l.toLowerCase().indexOf(ql); return `${esc(l.slice(0, i))}<strong>${esc(l.slice(i, i + ql.length))}</strong>${esc(l.slice(i + ql.length))}`; };
+    let k = 0;
+    $("#ap-list").innerHTML = apGroups(q).map((g, gi) => `<li role="presentation">
+        <div class="ap__group" id="ap-g-${gi}" aria-hidden="true">${esc(g.title)}</div>
+        <ul class="ap__grp" role="group" aria-labelledby="ap-g-${gi}">
+          ${g.items.map((l) => `<li class="dd__item ap__opt" role="option" id="ap-opt-${k++}" data-value="${esc(l)}" aria-selected="false">${hl(l)}</li>`).join("")}
+        </ul></li>`).join("");
+    ap.opts = [...$("#ap-list").querySelectorAll("[role=option]")];
+    const empty = $("#ap-empty");
+    empty.hidden = ap.opts.length > 0;
+    empty.textContent = `No attributes match \u2018${q.trim()}\u2019`;
+    apActive(ap.opts.length ? 0 : -1);
+  }
+  function apActive(i) {
+    ap.active = i;
+    ap.opts.forEach((o, j) => o.classList.toggle("is-active", j === i));
+    const q = $("#ap-q");
+    if (i < 0) { q.removeAttribute("aria-activedescendant"); return; }
+    q.setAttribute("aria-activedescendant", ap.opts[i].id);
+    const list = $("#ap-list"), o = ap.opts[i], head = o.closest("li[role=presentation]").querySelector(".ap__group").offsetHeight;
+    if (o.offsetTop - head < list.scrollTop) list.scrollTop = o.offsetTop - head; // keep it clear of the pinned group heading
+    else if (o.offsetTop + o.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = o.offsetTop + o.offsetHeight - list.clientHeight;
+  }
+  function apOpen() {
+    ap = { opts: [], active: -1 };
+    $("#ap-pop").hidden = false;
+    $("#val-__addattr").setAttribute("aria-expanded", "true");
+    $("#ap-q").value = "";
+    apRender();
+    $("#ap-q").focus();
+  }
+  function apClose(focusBtn) {
+    if (!ap) return;
+    ap = null; clearTimeout(apTimer);
+    const pop = $("#ap-pop"); if (pop) pop.hidden = true;
+    const btn = $("#val-__addattr");
+    if (btn) { btn.setAttribute("aria-expanded", "false"); if (focusBtn) btn.focus(); }
+  }
+  function apPick(i) {
+    const o = ap && ap.opts[i]; if (!o) return;
+    const label = o.dataset.value;
+    apClose(false);
+    addAttribute(label);
+  }
+  review.addEventListener("click", (e) => {
+    if (e.target.closest("#val-__addattr")) { ap ? apClose(true) : apOpen(); return; }
+    const o = e.target.closest(".ap__opt"); if (o && ap) { apPick(ap.opts.indexOf(o)); return; }
+    if (ap && !e.target.closest(".add-attr-wrap")) apClose(false);
+  });
+  review.addEventListener("mousemove", (e) => { const o = e.target.closest(".ap__opt"); if (o && ap && ap.opts.indexOf(o) !== ap.active) apActive(ap.opts.indexOf(o)); });
+  review.addEventListener("input", (e) => {
+    if (e.target.id !== "ap-q" || !ap) return;
+    apRender();
+    clearTimeout(apTimer);
+    apTimer = setTimeout(() => { if (ap) announce(ap.opts.length ? `${ap.opts.length} ${ap.opts.length === 1 ? "attribute matches" : "attributes match"}.` : $("#ap-empty").textContent); }, 500);
+  });
+  review.addEventListener("keydown", (e) => {
+    if (e.target.id === "val-__addattr" && e.key === "ArrowDown" && !ap) { e.preventDefault(); apOpen(); return; }
+    if (e.target.id !== "ap-q" || !ap) return;
+    const n = ap.opts.length;
+    if (e.key === "ArrowDown") { e.preventDefault(); if (n) apActive(Math.min(n - 1, ap.active + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (n) apActive(Math.max(0, ap.active - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (ap.active >= 0) apPick(ap.active); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); apClose(true); } // close the picker, not the dialog
+    else if (e.key === "Tab") apClose(false);
+  });
   // A profile attribute the reviewer added: current profile value, editable, + and delete, no revert, light-grey row
   function arowHTML(r, i, all) {
     const locked = !!state.resolved;
@@ -428,7 +580,7 @@
       <span class="sr-only" id="${hint}">${n} ${n === 1 ? "field is" : "fields are"} rejected. Resubmit sends ${n === 1 ? "it" : "them"} back to the requester with your comments and applies the other changes.</span>`;
   }
   function renderReview() {
-    dd = null;
+    dd = null; ap = null;
     $("#review-title").textContent = state.viewing ? "View DCR" : "Review DCR";
     $("#comment-form").hidden = !!state.viewing;
     $("#rail-closed").hidden = !state.viewing;
@@ -491,7 +643,7 @@
     if (review.open) review.close();
   }
   review.addEventListener("close", () => {
-    state.viewing = null; state.histOpen = new Set();
+    state.viewing = null; state.histOpen = new Set(); state.rejecting = null;
     $("#review-title").textContent = "Review DCR"; $("#comment-form").hidden = false; $("#rail-closed").hidden = true;
     renderPanel(); renderInbox(); renderWorkflow();
     // Return focus to whatever opened the dialog (re-rendered buttons are found again by selector)
@@ -750,7 +902,30 @@
   // Removing a rejection also deletes its comment, so the reviewer confirms first.
   const udlg = $("#unreject-dialog");
   let unrejectId = null;
-  $(".confirm-dlg__icon").innerHTML = icon("error_outline", 24);
+  document.querySelectorAll(".confirm-dlg__icon").forEach((el) => (el.innerHTML = icon("error_outline", 24)));
+
+  // ---------- Generic confirm (P6 Discard, I4 Delete) ----------
+  const xdlg = $("#confirm-dialog");
+  let xResolve = null, xReturn = null;
+  function confirmDialog({ title, text, ok, cancel }) {
+    $("#confirm-title").textContent = title;
+    $("#confirm-desc").textContent = text;
+    $("#confirm-ok").textContent = ok;
+    $("#confirm-cancel").textContent = cancel;
+    xReturn = document.activeElement;
+    xdlg.returnValue = "";
+    xdlg.showModal();
+    $("#confirm-cancel").focus(); // safe default
+    return new Promise((resolve) => { xResolve = resolve; });
+  }
+  $("#confirm-cancel").addEventListener("click", () => xdlg.close("cancel"));
+  $("#confirm-form").addEventListener("submit", (e) => { e.preventDefault(); xdlg.close("ok"); });
+  xdlg.addEventListener("close", () => {
+    const ok = xdlg.returnValue === "ok", done = xResolve, back = xReturn;
+    xResolve = xReturn = null;
+    if (!ok && back && document.contains(back)) back.focus();
+    if (done) done(ok);
+  });
   function askUnreject(id) {
     const f = field(id);
     const cs = state.comments.filter((c) => c.fieldId === id && c.kind === "rejection");
@@ -894,7 +1069,7 @@
     }
     const v = opts[i].dataset.value;
     ddClose();
-    if (id === "mode") { setMode(v); return; }
+    if (id === "mode") { requestMode(v); return; }
     if (id.startsWith("sg-")) {
       const r = sgRow(id.slice(3));
       if (r && v !== r.value) { r.value = v; renderGrid(); announce(`${r.label} set to ${v}.`); }
@@ -974,7 +1149,7 @@
   let dp = null; // { pop, trigger, focus: Date }
   const wfEl = $("#wf-panel");
   function dpRender() {
-    const sel = parseDMY(state.wfForm.dueDate), today = new Date(), f = dp.focus;
+    const sel = dp.sel || parseDMY(state.wfForm.dueDate), today = new Date(), f = dp.focus;
     const first = new Date(f.getFullYear(), f.getMonth(), 1);
     const start = addDays(first, -((first.getDay() + 6) % 7));
     let rows = "";
@@ -1002,7 +1177,8 @@
   function dpOpen(trigger) {
     ddClose();
     const pop = $("#dp-wf-due");
-    dp = { pop, trigger, focus: parseDMY(state.wfForm.dueDate) };
+    const typed = parseTyped($("#val-wf-due").value);
+    dp = { pop, trigger, focus: typed || parseDMY(state.wfForm.dueDate), sel: typed };
     dpRender();
     pop.hidden = false;
     trigger.setAttribute("aria-expanded", "true");
@@ -1024,7 +1200,9 @@
   function dpPick(d) {
     const v = fmtDMY(d);
     dpClose();
-    if (v !== state.wfForm.dueDate) { state.wfForm.dueDate = v; renderWorkflow(); announce(`Due date set to ${longDate(d)}.`); }
+    state.dueMsg = d < TODAY ? { level: "warning", text: "This date is in the past." } : null;
+    if (v !== state.wfForm.dueDate) state.wfForm.dueDate = v;
+    renderWorkflow(); announce(`Due date set to ${longDate(d)}.${state.dueMsg ? " This date is in the past." : ""}`);
     $("#val-wf-due").focus();
   }
   wfEl.addEventListener("click", (e) => {
@@ -1038,7 +1216,10 @@
   });
   wfEl.addEventListener("keydown", (e) => {
     if (!dp) return;
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); dpClose(true); return; }
+    if (e.key === "Escape") { // first Esc only closes the calendar (from the typed field too)
+      e.preventDefault(); e.stopImmediatePropagation();
+      dpClose(!e.target.matches(".dp__input")); return;
+    }
     if (!e.target.closest(".dp__day")) return;
     const f = dp.focus;
     const moves = {
@@ -1050,8 +1231,62 @@
     else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); dpPick(f); }
   });
   // Close when focus or a click leaves the date picker
-  document.addEventListener("click", (e) => { if (dp && !dp.pop.contains(e.target) && !dp.trigger.contains(e.target)) dpClose(); });
-  wfEl.addEventListener("focusout", (e) => { if (dp && e.relatedTarget && !dp.pop.contains(e.relatedTarget) && e.relatedTarget !== dp.trigger) dpClose(); });
+  document.addEventListener("click", (e) => { if (dp && !dp.pop.contains(e.target) && !dp.trigger.contains(e.target) && !e.target.closest(".dp__input")) dpClose(); });
+  wfEl.addEventListener("focusout", (e) => { if (dp && e.relatedTarget && !dp.pop.contains(e.relatedTarget) && e.relatedTarget !== dp.trigger && !e.relatedTarget.matches(".dp__input")) dpClose(); });
+
+  /* P9 (interaction spec, option c): the due date can be typed as well as picked.
+     Field and calendar stay in sync: the calendar highlight only moves on a complete, real date (so it doesn't
+     jump on "1" or "12/0"); a date in another month turns the calendar to that month. The typed date saves on
+     Enter or when focus leaves the field. A date that doesn't exist is an error; a past date is a warning. */
+  function parseTyped(t) {
+    const m = String(t || "").trim().match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+    if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    return d.getDate() === +m[1] && d.getMonth() === +m[2] - 1 ? d : null;
+  }
+  function dueMsgHTML() {
+    const r = state.dueMsg;
+    return `<p class="erow__msg dp__msg erow__msg--${r ? r.level : "none"}" id="msg-wf-due" ${r ? "" : "hidden"}>${r ? `${icon("error_outline", 16)}<span><span class="sr-only">${r.level === "error" ? "Error: " : "Note: "}</span>${esc(r.text)}</span>` : ""}</p>`;
+  }
+  function showDueMsg() {
+    const old = $("#msg-wf-due"); if (old) old.outerHTML = dueMsgHTML();
+    const inp = $("#val-wf-due");
+    if (inp) state.dueMsg && state.dueMsg.level === "error" ? inp.setAttribute("aria-invalid", "true") : inp.removeAttribute("aria-invalid");
+  }
+  function commitDue(inp) {
+    const raw = inp.value.trim(), d = parseTyped(raw);
+    if (!d) {
+      state.dueMsg = { level: "error", text: raw ? "Enter a real date as DD/MM/YYYY, e.g. 05/02/2026." : "Enter a due date as DD/MM/YYYY." };
+      showDueMsg();
+      return;
+    }
+    const v = fmtDMY(d);
+    inp.value = v;
+    state.dueMsg = d < TODAY ? { level: "warning", text: "This date is in the past." } : null;
+    showDueMsg();
+    if (v !== state.wfForm.dueDate) {
+      state.wfForm.dueDate = v;
+      const flag = $("#req-due-text"); if (flag) flag.innerHTML = `<span class="sr-only">Due </span>${esc(v)}`;
+      announce(`Due date set to ${longDate(d)}.${state.dueMsg ? " This date is in the past." : ""}`);
+    }
+    if (dp) { dp.sel = null; dp.focus = d; dpRender(); }
+  }
+  wfEl.addEventListener("input", (e) => {
+    if (!e.target.matches(".dp__input")) return;
+    const d = parseTyped(e.target.value);
+    if (d && state.dueMsg && state.dueMsg.level === "error") { state.dueMsg = null; showDueMsg(); } // clears as soon as it's valid
+    if (d && dp) { dp.sel = d; dp.focus = d; dpRender(); } // sync only on a complete, real date
+  });
+  wfEl.addEventListener("change", (e) => { if (e.target.matches(".dp__input")) commitDue(e.target); });
+  wfEl.addEventListener("keydown", (e) => {
+    if (!e.target.matches(".dp__input")) return;
+    if (e.key === "Enter") { e.preventDefault(); commitDue(e.target); }
+    else if (e.key === "Escape" && !dp && (e.target.value !== state.wfForm.dueDate || state.dueMsg)) { // back to the saved date (a second Esc closes the panel)
+      e.preventDefault(); e.stopPropagation();
+      e.target.value = state.wfForm.dueDate;
+      state.dueMsg = null; showDueMsg();
+    }
+  });
 
 
   // ---------- Inbox panel: Additional details (profile context) ----------
@@ -1207,6 +1442,22 @@
     announce(m === "viewing" ? `${pre}Back to viewing.` : `${pre}${MODE_COPY[m].enter}`);
   }
 
+  /* P6 (interaction spec, option b): leaving Suggesting / Editing with unsent changes asks first.
+     With no changes it leaves at once. Keep editing is the default, so Enter / Esc never discard. */
+  function requestMode(m, focusSel) {
+    const n = state.sug && m !== state.mode ? sgChanges() : 0;
+    if (!n) { setMode(m, focusSel); return; }
+    const editing = state.mode === "editing", word = n === 1 ? "change" : "changes";
+    const labels = [...new Set(sgRows().filter((r) => r.added ? !r.del && filled(r.value) : r.del || String(r.value ?? "").trim() !== r.orig).map((r) => r.label))];
+    const list = labels.length > 5 ? `${labels.slice(0, 5).join(", ")} and ${labels.length - 5} more` : labels.join(", ");
+    confirmDialog({
+      title: editing ? `Discard ${n} unsaved ${word}?` : `Discard ${n} ${word}?`,
+      text: `${editing ? "Your changes haven't been saved to the profile." : `Your suggestion for ${profile.entityName} hasn't been sent.`} Changed: ${list}.`,
+      ok: "Discard", cancel: "Keep editing",
+    }).then((ok) => { if (ok) setMode(m, focusSel); });
+  }
+  window.addEventListener("beforeunload", (e) => { if (state.sug && sgChanges()) { e.preventDefault(); e.returnValue = ""; } });
+
   function renderGrid() {
     if (dd && $("#profile-grid").contains(dd.trigger)) dd = null;
     const sug = editable();
@@ -1314,7 +1565,7 @@
     renderGrid();
     const f = focus && $(focus, grid); if (f) f.focus();
   });
-  $("#suggest-cancel").addEventListener("click", () => setMode("viewing"));
+  $("#suggest-cancel").addEventListener("click", () => requestMode("viewing"));
   $("#suggest-send").addEventListener("click", () => {
     const n = sgChanges(), mode = state.mode, copy = MODE_COPY[mode];
     if (!n) return;
@@ -1369,7 +1620,7 @@
               ${matchLine(dcr.dcrId)}
             </div>
             <div class="req__meta">
-              <span data-icon="flag" data-size="14" aria-hidden="true"></span><span><span class="sr-only">Due </span>${esc(f.dueDate)}</span>
+              <span data-icon="flag" data-size="14" aria-hidden="true"></span><span id="req-due-text"><span class="sr-only">Due </span>${esc(f.dueDate)}</span>
               ${r ? "" : `<button type="button" class="icon-btn req__toggle" data-action="wf-expand" aria-expanded="${expanded}" aria-controls="req-dcr-form" aria-label="${expanded ? "Hide" : "Show"} due date, priority and assignee">
                 <span data-icon="${expanded ? "arrow_up_20" : "expand_more_20"}" data-size="20"></span></button>`}
             </div>
@@ -1384,10 +1635,16 @@
           ${expanded ? `
           <div class="req__form" id="req-dcr-form">
             <div class="req__row">
-              <div class="dropdown" data-id="wf-due"><span class="field__label" id="lbl-wf-due">Due date</span>
+              <div class="dropdown" data-id="wf-due"><label class="field__label" id="lbl-wf-due" for="val-wf-due">Due date</label>
                 <div class="dp">
-                  <button type="button" class="erow__input dp__trigger" id="val-wf-due" aria-haspopup="dialog" aria-expanded="false" aria-controls="dp-wf-due" aria-labelledby="lbl-wf-due val-wf-due">
-                    <span class="dd__value">${esc(f.dueDate)}</span><span class="dp__icon" data-icon="date_range" data-size="20" aria-hidden="true"></span></button>
+                  <div class="dp__field">
+                    <input class="erow__input dp__input" id="val-wf-due" value="${esc(f.dueDate)}" placeholder="DD/MM/YYYY" inputmode="numeric" autocomplete="off" maxlength="10"
+                      aria-describedby="hint-wf-due msg-wf-due" ${state.dueMsg && state.dueMsg.level === "error" ? 'aria-invalid="true"' : ""}>
+                    <button type="button" class="icon-btn dp__trigger" aria-label="Choose due date from a calendar" aria-haspopup="dialog" aria-expanded="false" aria-controls="dp-wf-due">
+                      <span class="dp__icon" data-icon="date_range" data-size="20" aria-hidden="true"></span></button>
+                  </div>
+                  <span class="sr-only" id="hint-wf-due">Format DD/MM/YYYY</span>
+                  ${dueMsgHTML()}
                   <div class="dp__pop" id="dp-wf-due" role="dialog" aria-modal="false" aria-labelledby="dp-title" hidden></div>
                 </div></div>
               <div class="dropdown" data-id="wf-priority"><span class="field__label" id="lbl-wf-priority">Priority</span>
@@ -1607,7 +1864,9 @@
         (inDialog ? review : panel).querySelector(`[data-id="${id}"] [data-action="why"]`)?.focus();
         break;
       }
-      case "reject-field": askComment({ kind: "field", id }, `Rejecting ${field(id).label}.`); break;
+      case "reject-field": openReason(id); break;
+      case "reason-cancel": cancelReason(id); break;
+      case "reason-submit": submitReason(id); break;
       case "unreject": askUnreject(id); break;
       case "add-value": {
         const f = field(id);
@@ -1737,6 +1996,19 @@
     if (old) old.outerHTML = msgHTML(it.id, r);
     r && r.level === "error" ? el.setAttribute("aria-invalid", "true") : el.removeAttribute("aria-invalid");
   });
+  // R14: inline rejection reason box
+  review.addEventListener("input", (e) => {
+    const ta = e.target.closest("textarea[data-reason]"); if (!ta) return;
+    const box = ta.closest(".reason"), n = ta.value.length;
+    state.drafts[ta.dataset.reason] = ta.value;
+    box.querySelector('[data-action="reason-submit"]').disabled = !ta.value.trim();
+    const c = box.querySelector(".reason__count"); c.hidden = n < 900; c.textContent = `${n} / 1,000`;
+  });
+  review.addEventListener("keydown", (e) => {
+    const ta = e.target.closest && e.target.closest("textarea[data-reason]"); if (!ta) return;
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelReason(ta.dataset.reason); }
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitReason(ta.dataset.reason); }
+  });
   $("#close-review").addEventListener("click", closeReview);
   $("#comment-form").addEventListener("submit", (e) => {
     e.preventDefault();
@@ -1763,7 +2035,7 @@
   document.querySelectorAll(".nav-item").forEach((a) => a.addEventListener("click", (e) => e.preventDefault()));
   $("#reset-demo").addEventListener("click", () => {
     unrejectId = null;
-    [udlg, cdlg, review].forEach((d) => { if (d.open) d.close(); });
+    [xdlg, udlg, cdlg, review].forEach((d) => { if (d.open) d.close(); });
     state = freshState();
     panel.hidden = true; toast.hidden = true;
     renderInbox(); renderFilterForm(); renderWorkflow(); renderMode(); renderGrid();

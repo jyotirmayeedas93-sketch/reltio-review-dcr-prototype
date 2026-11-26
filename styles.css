@@ -363,7 +363,20 @@ p, h2, h3, ol, ul, dl, dd { margin: 0; }
 .add-attr .dd__chev { color: var(--icon-action); }
 .add-attr:disabled { color: var(--text-disabled); cursor: default; }
 .add-attr:disabled [data-icon], .add-attr:disabled .dd__chev, .add-attr:disabled .ico { color: var(--icon-disabled); }
-.add-attr__menu { right: auto; width: 320px; top: calc(100% - 8px); }
+/* R9: searchable attribute picker (DS Menu surface + search field) */
+.ap { position: absolute; left: 0; top: calc(100% - 8px); z-index: 20; width: 320px; padding: var(--scale-200) 0 0; background: var(--surface-default); border: var(--menu-border-width) solid var(--menu-border); border-radius: var(--menu-radius); box-shadow: var(--shadow-menu); }
+.ap[hidden] { display: none; }
+.ap__search { display: flex; align-items: center; gap: var(--scale-100); height: 36px; margin: 0 var(--scale-200) var(--scale-100); padding: 0 var(--scale-200); border: var(--field-border-width) solid var(--border-default-light); border-radius: var(--field-radius); color: var(--icon-default); }
+.ap__search:focus-within { outline: var(--field-focus-ring-width) solid var(--field-focus-ring-color); }
+.ap__search input { flex: 1; min-width: 0; border: 0; outline: none; background: none; font: var(--typography-body-sm); color: var(--field-value-text); }
+.ap__list { max-height: calc(var(--menu-item-height) * 8); overflow-y: auto; margin: 0; padding: 0; list-style: none; scrollbar-color: var(--menu-scrollbar-thumb) var(--surface-default); }
+.ap__group { position: sticky; top: 0; z-index: 1; padding: var(--scale-100) var(--menu-item-padding-x); background: var(--surface-default); font: var(--typography-body-xsm-semibold); color: var(--app-muted-text); }
+.ap__grp { margin: 0; padding: 0; list-style: none; }
+.ap__opt { cursor: pointer; }
+.ap__opt strong { font-weight: 600; }
+.ap__opt.is-active { background: var(--menu-item-bg-hover); box-shadow: inset 0 0 0 var(--border-width-md) var(--border-focus); }
+.ap__empty { padding: var(--scale-200) var(--menu-item-padding-x) var(--scale-300); font: var(--typography-body-sm); color: var(--app-muted-text); }
+.ap__empty[hidden] { display: none; }
 .review .ai-summary { min-height: 36px; padding: 9px 14px; border: 0; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
 .edit-rows { list-style: none; padding: 0; border: var(--border-width-sm) solid var(--border-default); border-top: 0; border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
 .edit-rows > .erow:last-child { border-radius: 0 0 var(--radius-lg) var(--radius-lg); }
@@ -432,10 +445,21 @@ p, h2, h3, ol, ul, dl, dd { margin: 0; }
 .erow__tools { display: inline-flex; align-items: center; gap: 0; }
 .erow__tools .icon-btn { width: var(--scale-500); min-width: var(--scale-500); height: 36px; color: var(--icon-action); }
 .erow__end { margin-left: var(--scale-200); display: inline-flex; align-items: center; gap: var(--scale-200); }
-.erow .btn-xs { opacity: 0; transition: opacity 120ms; }
-/* REJECT appears on row hover (Figma Edit Row "Property 1=Hover") or keyboard focus in the row */
-.erow:hover .btn-xs, .erow:has(:focus-visible:not(input)) .btn-xs, .btn-xs:focus-visible { opacity: 1; }
-@media (hover: none) { .erow .btn-xs { opacity: 1; } }
+/* R13 (interaction spec, option b): Reject is always visible, low emphasis (text only).
+   The red outline from Figma's hover state appears on row hover / focus, so the row still "answers" the pointer. */
+.erow .btn-xs { border-color: transparent; background: transparent; transition: border-color 120ms, background-color 120ms; }
+.erow:hover .btn-xs, .erow .btn-xs:focus-visible, .erow .btn-xs[aria-expanded="true"] { border-color: var(--a11y-red); background: var(--surface-default); }
+.erow .btn-xs:hover { background: var(--surface-error); }
+@media (prefers-reduced-motion: reduce) { .erow .btn-xs { transition: none; } }
+/* R14: inline rejection reason (DS Field + text buttons, error surface like the rejection comment card) */
+.reason { padding: var(--scale-300); border-radius: var(--radius-md); background: var(--surface-error); box-shadow: inset 2px 0 0 var(--a11y-red); }
+.reason__label { display: block; margin-bottom: var(--scale-100); font: var(--typography-body-xsm-semibold); color: var(--text-body); }
+.reason__input { display: block; width: 100%; min-height: 56px; resize: vertical; padding: var(--field-padding-y) var(--field-padding-x); background: var(--field-bg); border: var(--field-border-width) solid var(--border-default-light); border-radius: var(--field-radius); font: var(--typography-body-sm); color: var(--field-value-text); }
+.reason__input:focus { outline: var(--field-focus-ring-width) solid var(--field-focus-ring-color); outline-offset: 0; }
+.reason__foot { display: flex; align-items: center; gap: var(--scale-100); margin-top: var(--scale-100); }
+.reason__hint { flex: 1; font: var(--typography-body-xsm); color: var(--app-muted-text); }
+.reason__count { font: var(--typography-body-xsm); color: var(--text-body); }
+.reason__count[hidden] { display: none; }
 .erow .why { font: var(--fig-type-11-5-regular); padding-bottom: var(--scale-50); }
 .erow--rejected { box-shadow: inset 3px 0 0 var(--a11y-red); }
 /* Value added by the reviewer with "+": lightest DS grey (Grey/25) so it reads as the reviewer's, not the requester's */
@@ -702,7 +726,11 @@ button.navrail__item:hover, a.navrail__item:hover { background: var(--surface-ac
 
 /* Date picker — Build DS has none; composed from Field, Menu surface, icon buttons and Menu item states */
 .dp { position: relative; }
-.dp__trigger { display: flex; align-items: center; gap: var(--field-gap); text-align: left; cursor: pointer; }
+/* P9: typed date field + calendar icon button inside it */
+.dp__field { position: relative; }
+.dp__input { padding-right: 44px; }
+.dp__trigger { position: absolute; top: 3px; right: 3px; width: 36px; height: 36px; color: var(--icon-default); cursor: pointer; }
+.dp__msg { width: auto; margin: var(--scale-100) 0 0; }
 .dp__icon { color: var(--icon-default); }
 .dp__pop { position: absolute; top: calc(100% + var(--scale-100)); left: 0; z-index: 20; width: 300px; padding: var(--scale-300);
   background: var(--surface-default); border: var(--menu-border-width) solid var(--menu-border); border-radius: var(--menu-radius); box-shadow: var(--shadow-menu); }

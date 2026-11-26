@@ -293,6 +293,22 @@
     </form>
   </dialog>
 
+  <!-- Generic confirm (interaction spec P6 Discard, I4 Delete): same shell as the undo-rejection confirm, DS tokens.
+       The safe action (Cancel / Keep editing) has focus, so Enter or Esc never loses work. -->
+  <dialog class="comment-dlg confirm-dlg" id="confirm-dialog" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-desc">
+    <form method="dialog" id="confirm-form">
+      <div class="confirm-dlg__head">
+        <span class="confirm-dlg__icon" aria-hidden="true"></span>
+        <h2 class="comment-dlg__title confirm-dlg__title" id="confirm-title"></h2>
+      </div>
+      <p class="confirm-dlg__text" id="confirm-desc"></p>
+      <div class="comment-dlg__footer">
+        <button type="button" class="text-btn" id="confirm-cancel"></button>
+        <button type="submit" class="text-btn text-btn--danger" id="confirm-ok"></button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- DS Snack Bar -->
   <div class="toast" id="toast" role="status" hidden>
     <span class="toast__icon" aria-hidden="true"></span>
